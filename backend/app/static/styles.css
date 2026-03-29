@@ -1,0 +1,143 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #f5f7fb;
+  color: #172033;
+}
+
+.page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px;
+  display: grid;
+  gap: 16px;
+}
+
+.panel {
+  background: #fff;
+  border: 1px solid #d9e0ec;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 8px 24px rgba(19, 38, 82, 0.06);
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+.subtle {
+  color: #5d6983;
+}
+
+.grid-form {
+  display: grid;
+  gap: 12px;
+}
+
+label,
+fieldset {
+  display: grid;
+  gap: 6px;
+}
+
+input,
+select,
+button {
+  font: inherit;
+}
+
+input,
+select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #bcc7da;
+  border-radius: 8px;
+  background: #fff;
+}
+
+button {
+  width: fit-content;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 8px;
+  background: #1d5cff;
+  color: #fff;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: #eef3ff;
+  color: #1d5cff;
+}
+
+button.danger {
+  background: #c73b3b;
+}
+
+.stack {
+  display: grid;
+  gap: 12px;
+}
+
+.user-card,
+.result-card {
+  border: 1px solid #d9e0ec;
+  border-radius: 10px;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #eef3ff;
+  color: #2746b2;
+  font-size: 0.88rem;
+}
+
+.checkbox-list,
+.weekday-fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.label-title {
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+
+.flash {
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #eef8ef;
+  color: #216a2c;
+}
+
+.flash.error {
+  background: #fff1f1;
+  color: #9d2323;
+}
+
+.hidden {
+  display: none;
+}
+
+small {
+  color: #5d6983;
+}
