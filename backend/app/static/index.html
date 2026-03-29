@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Scheduler Demo</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="panel">
+        <h1>AI Scheduler Demo</h1>
+        <p class="subtle">Create users, connect Google Calendars, rank the top 3 feasible meeting slots, then confirm one and create the event.</p>
+        <div id="flash" class="flash hidden"></div>
+      </section>
+
+      <section class="panel">
+        <h2>1. Add People</h2>
+        <form id="user-form" class="grid-form">
+          <label>
+            Display name
+            <input id="display-name" required type="text" placeholder="Alice" />
+          </label>
+          <label>
+            Email
+            <input id="email" required type="email" placeholder="alice@example.com" />
+          </label>
+          <label>
+            Timezone
+            <input id="timezone" required type="text" />
+          </label>
+          <button type="submit">Create user</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>2. Connect Google Calendars</h2>
+        <div id="users-list" class="stack"></div>
+      </section>
+
+      <section class="panel">
+        <h2>3. Schedule a Meeting</h2>
+        <p class="subtle">For the demo, candidate slots are limited to 8:00 AM to 6:00 PM in the organizer's timezone. Preferred hours only affect ranking inside that window.</p>
+        <form id="schedule-form" class="grid-form">
+          <label>
+            Organizer
+            <select id="organizer-select" required></select>
+          </label>
+          <label>
+            Meeting title
+            <input id="meeting-title" required type="text" placeholder="Weekly sync" />
+          </label>
+          <label>
+            Duration (minutes)
+            <input id="duration-minutes" required type="number" min="15" step="15" value="30" />
+          </label>
+          <label>
+            Must schedule before
+            <input id="deadline-at" required type="datetime-local" />
+          </label>
+          <fieldset class="weekday-fieldset">
+            <legend>Preferred weekdays</legend>
+            <label><input type="checkbox" value="MON" /> Mon</label>
+            <label><input type="checkbox" value="TUE" /> Tue</label>
+            <label><input type="checkbox" value="WED" /> Wed</label>
+            <label><input type="checkbox" value="THU" /> Thu</label>
+            <label><input type="checkbox" value="FRI" /> Fri</label>
+          </fieldset>
+          <label>
+            Preferred start time
+            <input id="preferred-start" type="time" />
+          </label>
+          <label>
+            Preferred end time
+            <input id="preferred-end" type="time" />
+          </label>
+          <div>
+            <p class="label-title">Required attendees</p>
+            <div id="attendees-list" class="checkbox-list"></div>
+          </div>
+          <button type="submit">Find top 3 slots</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>4. Results</h2>
+        <div id="results" class="stack"></div>
+      </section>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
