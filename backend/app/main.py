@@ -4,11 +4,12 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
-from app.api.routers import availability, google_calendar, health, preferences, schedule_requests, users
+from app.api.routers import availability, events, google_calendar, health, planning, preferences, schedule_requests, users
 from app.infrastructure.config import Settings
 from app.infrastructure.db.session import build_session_factory
 from app.infrastructure.integrations.google_calendar.client import build_google_calendar_client
@@ -23,6 +24,13 @@ def create_app(
 ) -> FastAPI:
     app_settings = settings or Settings()
     app = FastAPI(title=app_settings.app_name)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[app_settings.frontend_url],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.state.settings = app_settings
     app.state.session_factory = session_factory or build_session_factory(app_settings.database_url)
     app.state.preference_parser = preference_parser or build_preference_parser(
@@ -55,6 +63,8 @@ def create_app(
     app.include_router(users.router, prefix=app_settings.api_prefix)
     app.include_router(availability.router, prefix=app_settings.api_prefix)
     app.include_router(preferences.router, prefix=app_settings.api_prefix)
+    app.include_router(events.router, prefix=app_settings.api_prefix)
+    app.include_router(planning.router, prefix=app_settings.api_prefix)
     app.include_router(schedule_requests.router, prefix=app_settings.api_prefix)
     app.include_router(google_calendar.router, prefix=app_settings.api_prefix)
 

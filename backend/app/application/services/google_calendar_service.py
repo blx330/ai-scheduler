@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -28,6 +29,8 @@ from app.infrastructure.integrations.google_calendar.client import (
     GoogleCalendarSummary,
     GoogleCreatedEvent,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -128,6 +131,12 @@ class GoogleCalendarService:
         connection.status = "configured"
         self.db.add(connection)
         self.db.commit()
+        logger.info(
+            "Saved Google calendar selection for user %s with %d busy calendars and write calendar %s",
+            user_id,
+            len(busy_calendar_ids),
+            write_calendar_id or "primary",
+        )
         return self.get_connection_status(user_id)
 
     def sync_busy_intervals(self, user_id: UUID, horizon_start: datetime, horizon_end: datetime) -> BusySyncResult:
@@ -172,6 +181,14 @@ class GoogleCalendarService:
             )
 
         self.db.commit()
+        logger.info(
+            "Synced %d Google busy intervals for user %s across calendars %s between %s and %s",
+            len(busy_intervals),
+            user_id,
+            calendar_ids,
+            start_at.isoformat(),
+            end_at.isoformat(),
+        )
         return BusySyncResult(
             user_id=user_id,
             synced_interval_count=len(busy_intervals),
