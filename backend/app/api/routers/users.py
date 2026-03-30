@@ -31,3 +31,13 @@ def get_user(user_id: UUID, db: Session = Depends(get_db)) -> UserRead:
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     return UserRead.model_validate(user)
+
+
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_user(user_id: UUID, db: Session = Depends(get_db)) -> None:
+    try:
+        deleted = UserService(db).delete_user(user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="User not found")
