@@ -11,8 +11,11 @@ GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
 GOOGLE_FREEBUSY_URL = "https://www.googleapis.com/calendar/v3/freeBusy"
 GOOGLE_EVENTS_URL_TEMPLATE = "https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events"
+GOOGLE_SCOPE_CALENDAR = "https://www.googleapis.com/auth/calendar"
+GOOGLE_SCOPE_CALENDAR_FREEBUSY = "https://www.googleapis.com/auth/calendar.freebusy"
+GOOGLE_SCOPE_CALENDAR_READONLY = "https://www.googleapis.com/auth/calendar.readonly"
 GOOGLE_SCOPES = [
-    "https://www.googleapis.com/auth/calendar",
+    GOOGLE_SCOPE_CALENDAR,
 ]
 
 
@@ -120,7 +123,7 @@ class GoogleCalendarClient:
             },
             timeout=30,
         )
-        response.raise_for_status()
+        self._raise_for_google_error(response, "Google OAuth token exchange")
         return self._build_tokens(response.json())
 
     def refresh_access_token(self, refresh_token: str) -> GoogleOAuthTokens:
@@ -134,7 +137,7 @@ class GoogleCalendarClient:
             },
             timeout=30,
         )
-        response.raise_for_status()
+        self._raise_for_google_error(response, "Google OAuth token refresh")
         payload = response.json()
         payload["refresh_token"] = refresh_token
         return self._build_tokens(payload)
@@ -146,7 +149,7 @@ class GoogleCalendarClient:
             params={"minAccessRole": "reader"},
             timeout=30,
         )
-        response.raise_for_status()
+        self._raise_for_google_error(response, "Google Calendar list")
         payload = response.json()
         return [
             GoogleCalendarSummary(
@@ -176,7 +179,7 @@ class GoogleCalendarClient:
             },
             timeout=30,
         )
-        response.raise_for_status()
+        self._raise_for_google_error(response, "Google Calendar free/busy lookup")
         payload = response.json()
         results: list[GoogleBusyInterval] = []
         for calendar_id, details in payload.get("calendars", {}).items():
@@ -220,7 +223,7 @@ class GoogleCalendarClient:
             },
             timeout=30,
         )
-        response.raise_for_status()
+        self._raise_for_google_error(response, "Google Calendar event creation")
         payload = response.json()
         return GoogleCreatedEvent(
             event_id=payload["id"],
@@ -256,6 +259,39 @@ class GoogleCalendarClient:
             scope=payload.get("scope"),
             token_type=payload.get("token_type", "Bearer"),
         )
+
+    @staticmethod
+    def _raise_for_google_error(response: Any, operation: str) -> None:
+        if 200 <= int(response.status_code) < 300:
+            return
+        message = GoogleCalendarClient._extract_google_error_message(response)
+        raise RuntimeError(f"{operation} failed: {message}")
+
+    @staticmethod
+    def _extract_google_error_message(response: Any) -> str:
+        default_message = f"HTTP {response.status_code}"
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+
+        if isinstance(payload, dict):
+            error_payload = payload.get("error")
+            if isinstance(error_payload, dict):
+                message = error_payload.get("message")
+                if isinstance(message, str) and message.strip():
+                    return message.strip()
+
+                for detail in error_payload.get("details", []):
+                    if isinstance(detail, dict):
+                        detail_message = detail.get("message")
+                        if isinstance(detail_message, str) and detail_message.strip():
+                            return detail_message.strip()
+
+        response_text = getattr(response, "text", "")
+        if isinstance(response_text, str) and response_text.strip():
+            return response_text.strip()
+        return default_message
 
 
 class NoopGoogleCalendarProvider:

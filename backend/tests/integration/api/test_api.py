@@ -278,6 +278,36 @@ def test_confirm_schedule_run_creates_calendar_event_with_fake_google_client(cli
     assert body["calendar_id"] == "primary"
 
 
+def test_google_connection_with_identity_only_scope_requires_reconnect(client, app) -> None:
+    user = client.post(
+        "/api/v1/users",
+        json={"display_name": "Scoped User", "timezone": "UTC", "email": "scoped@example.com"},
+    ).json()
+
+    session = app.state.session_factory()
+    try:
+        session.add(
+            CalendarConnection(
+                user_id=user["id"],
+                provider="google",
+                status="connected",
+                access_token="live-token",
+                refresh_token="refresh-token",
+                scopes="openid email profile",
+                token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    response = client.get(f"/api/v1/users/{user['id']}/google/connection")
+
+    assert response.status_code == 200
+    assert response.json()["connected"] is False
+    assert response.json()["status"] == "reauthorization_required"
+
+
 def test_google_busy_sync_persists_selected_calendars_and_overview_returns_intervals(client, app) -> None:
     selected_calendar_id = "dance-team@example.com"
     synced_interval = GoogleBusyInterval(

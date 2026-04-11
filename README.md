@@ -62,6 +62,8 @@ http://localhost:8000/api/v1/google/oauth/callback
 
 7. Copy the client ID and client secret into `.env`.
 
+If Google OAuth succeeds but busy sync returns a `403` from `/calendar/v3/freeBusy`, the usual cause is that the Google Calendar API is still disabled for the OAuth project. Enable it in Google Cloud Console and wait a few minutes for propagation before retrying.
+
 ## Environment
 
 Create `.env` from the example:
@@ -120,7 +122,10 @@ docker compose -f infra/compose.yaml run --rm api alembic upgrade head
 Or locally from `backend/` with a host-reachable `DATABASE_URL`:
 
 ```bash
-export DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/scheduler
+export DATABASE_URL=postgresql+psycopg://localhost:5432/scheduler
+# If your local Postgres requires an explicit role, use your local db user.
+# Example on this machine:
+# export DATABASE_URL=postgresql+psycopg://chas@localhost:5432/scheduler
 alembic upgrade head
 ```
 
@@ -129,7 +134,10 @@ alembic upgrade head
 ```bash
 cd backend
 source .venv_local/bin/activate
-export DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/scheduler
+export DATABASE_URL=postgresql+psycopg://localhost:5432/scheduler
+# If your local Postgres requires an explicit role, use your local db user.
+# Example on this machine:
+# export DATABASE_URL=postgresql+psycopg://chas@localhost:5432/scheduler
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
