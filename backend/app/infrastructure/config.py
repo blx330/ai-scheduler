@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:8000"
     oauth_state_secret: str = "change-me-for-demo"
     feather_api_key: str = ""
+    groq_api_key: str = ""
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8000/api/v1/google/oauth/callback"

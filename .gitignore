@@ -1,1 +1,28 @@
+# env
 .env
+.env.*
+
+# virtual environments
+.venv/
+.venv_local/
+
+# python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# mac
+.DS_Store
+
+# logs
+*.log
+
+# pytest
+.pytest_cache/
+
+# vscode
+.vscode/
+
+# snapshots
+PROJECT_SNAPSHOT_*.md

@@ -25,12 +25,24 @@ from app.infrastructure.db.models import (
     User,
 )
 from app.infrastructure.integrations.google_calendar.client import (
+    GOOGLE_SCOPE_CALENDAR,
+    GOOGLE_SCOPE_CALENDAR_FREEBUSY,
+    GOOGLE_SCOPE_CALENDAR_READONLY,
     GoogleCalendarProvider,
     GoogleCalendarSummary,
     GoogleCreatedEvent,
 )
 
 logger = logging.getLogger(__name__)
+
+GOOGLE_READ_SCOPES = frozenset(
+    {
+        GOOGLE_SCOPE_CALENDAR,
+        GOOGLE_SCOPE_CALENDAR_FREEBUSY,
+        GOOGLE_SCOPE_CALENDAR_READONLY,
+    }
+)
+GOOGLE_WRITE_SCOPES = frozenset({GOOGLE_SCOPE_CALENDAR})
 
 
 @dataclass(frozen=True)
@@ -98,10 +110,15 @@ class GoogleCalendarService:
                 selected_write_calendar_id=None,
                 token_expires_at=None,
             )
+        connected = bool(connection.refresh_token or connection.access_token)
+        status = connection.status
+        if connected and not _has_any_scope(connection.scopes, GOOGLE_READ_SCOPES):
+            connected = False
+            status = "reauthorization_required"
         return GoogleConnectionStatus(
             user_id=user_id,
-            connected=bool(connection.refresh_token or connection.access_token),
-            status=connection.status,
+            connected=connected,
+            status=status,
             account_email=connection.account_email,
             selected_busy_calendar_ids=list(connection.selected_busy_calendar_ids_json or []),
             selected_write_calendar_id=connection.selected_write_calendar_id,
@@ -110,6 +127,11 @@ class GoogleCalendarService:
 
     def list_calendars(self, user_id: UUID) -> list[GoogleCalendarSummary]:
         connection = self._require_connection(user_id)
+        self._ensure_connection_has_scope(
+            connection,
+            GOOGLE_READ_SCOPES,
+            "Google Calendar connection is missing read access. Reconnect Google and grant calendar access.",
+        )
         access_token = self._ensure_access_token(connection)
         return self.client.list_calendars(access_token)
 
@@ -141,6 +163,11 @@ class GoogleCalendarService:
 
     def sync_busy_intervals(self, user_id: UUID, horizon_start: datetime, horizon_end: datetime) -> BusySyncResult:
         connection = self._require_connection(user_id)
+        self._ensure_connection_has_scope(
+            connection,
+            GOOGLE_READ_SCOPES,
+            "Google Calendar connection is missing free/busy access. Reconnect Google and grant calendar access.",
+        )
         calendar_ids = list(connection.selected_busy_calendar_ids_json or [])
         if not calendar_ids:
             calendar_ids = [connection.selected_write_calendar_id or "primary"]
@@ -225,6 +252,11 @@ class GoogleCalendarService:
             raise ValueError("Ranked slot not found")
 
         connection = self._require_connection(schedule_request.organizer_user_id)
+        self._ensure_connection_has_scope(
+            connection,
+            GOOGLE_WRITE_SCOPES,
+            "Google Calendar connection is missing write access. Reconnect Google and grant calendar access.",
+        )
         access_token = self._ensure_access_token(connection)
         target_calendar_id = calendar_id or connection.selected_write_calendar_id or "primary"
 
@@ -282,6 +314,16 @@ class GoogleCalendarService:
             return connection
         return CalendarConnection(user_id=user_id, provider="google", status="connected")
 
+    @staticmethod
+    def _ensure_connection_has_scope(
+        connection: CalendarConnection,
+        required_scopes: frozenset[str],
+        error_message: str,
+    ) -> None:
+        if _has_any_scope(connection.scopes, required_scopes):
+            return
+        raise ValueError(error_message)
+
 
 def _sign_state(payload: dict[str, str], secret: str) -> str:
     encoded_payload = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8").rstrip("=")
@@ -306,3 +348,10 @@ def _verify_state(token: str, secret: str) -> dict[str, str]:
 def _decode_base64(value: str) -> bytes:
     padding = "=" * (-len(value) % 4)
     return base64.urlsafe_b64decode(value + padding)
+
+
+def _has_any_scope(scopes: str | None, required_scopes: frozenset[str]) -> bool:
+    if not scopes:
+        return True
+    granted_scopes = {scope.strip() for scope in scopes.split() if scope.strip()}
+    return bool(granted_scopes & required_scopes)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import requests
 from typing import Any, Protocol
 
 
@@ -136,7 +137,77 @@ Input:
         return _coerce_structured_output(raw_structured=raw_structured, timezone_name=timezone_name, raw_text=raw_text)
 
 
+class GroqPreferenceParser:
+    version = "groq-v1"
+
+    def __init__(self, api_key: str) -> None:
+        self.api_key = api_key
+        self.url = "https://api.groq.com/openai/v1/chat/completions"
+        self.model = "llama-3.3-70b-versatile"
+
+    def parse(self, raw_text: str, timezone_name: str) -> dict[str, Any]:
+        system_prompt = """You are a scheduling assistant that converts natural language availability preferences into structured JSON constraints. You must return ONLY valid JSON with no explanation, no markdown, no code fences, no preamble. The JSON must exactly match this schema:
+
+{
+  "schema_version": "1.0",
+  "timezone": "<the user timezone passed in>",
+  "preferred_weekdays": ["MON"],
+  "disallowed_weekdays": ["FRI"],
+  "preferred_time_ranges": [{"start_local": "09:00", "end_local": "12:00", "weight": 1.0}],
+  "disallowed_time_ranges": [{"start_local": "00:00", "end_local": "09:00", "weight": 1.0}],
+  "notes": "brief summary of what the user said"
+}
+
+Rules:
+- Allowed weekday values are exactly: MON, TUE, WED, THU, FRI, SAT, SUN
+- Time values must be HH:MM in 24-hour format
+- A weekday cannot appear in both preferred_weekdays and disallowed_weekdays
+- If a field has no relevant information, return an empty list
+- notes should be a short plain English summary of the constraints you extracted
+- Return ONLY the JSON object. No explanation. No markdown. No code blocks."""
+        user_prompt = f'User timezone: {timezone_name}\nUser preference text: "{raw_text}"'
+
+        try:
+            response = requests.post(
+                self.url,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": 0,
+                    "max_tokens": 512,
+                },
+                timeout=30,
+            )
+            response.raise_for_status()
+
+            content = response.json()["choices"][0]["message"]["content"].strip()
+            if content.startswith("```"):
+                content = content.removeprefix("```json").removeprefix("```").strip()
+                if content.endswith("```"):
+                    content = content[:-3].strip()
+
+            raw_structured = json.loads(content)
+            return _coerce_structured_output(
+                raw_structured=raw_structured,
+                timezone_name=timezone_name,
+                raw_text=raw_text,
+            )
+        except Exception as exc:  # noqa: BLE001 - provider and JSON errors should surface as ValueError
+            raise ValueError(f"Groq parser failed: {exc}") from exc
+
+
 def build_preference_parser(mode: str, api_key: str = "") -> PreferenceParser:
+    if mode == "groq":
+        if not api_key:
+            raise ValueError("GROQ_API_KEY is required when PARSER_MODE=groq")
+        return GroqPreferenceParser(api_key=api_key)
     if mode == "feather":
         if not api_key:
             raise ValueError("FEATHER_API_KEY is required when PARSER_MODE=feather")
