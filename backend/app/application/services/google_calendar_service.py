@@ -22,9 +22,6 @@ from app.infrastructure.db.models import (
     DanceEvent,
     DanceEventParticipant,
     PracticeSession,
-    ScheduleRequest,
-    ScheduleRequestParticipant,
-    ScheduleRun,
     User,
 )
 from app.infrastructure.integrations.google_calendar.client import (
@@ -223,62 +220,6 @@ class GoogleCalendarService:
             user_id=user_id,
             synced_interval_count=len(busy_intervals),
             calendar_ids=calendar_ids,
-        )
-
-    def create_event_for_schedule_run(
-        self,
-        schedule_run_id: UUID,
-        rank: int,
-        calendar_id: str | None = None,
-    ) -> GoogleCreatedEvent:
-        run = self.db.scalars(
-            select(ScheduleRun)
-            .where(ScheduleRun.id == schedule_run_id)
-            .options(selectinload(ScheduleRun.results))
-        ).one_or_none()
-        if run is None:
-            raise ValueError("Schedule run not found")
-
-        schedule_request = self.db.scalars(
-            select(ScheduleRequest)
-            .where(ScheduleRequest.id == run.schedule_request_id)
-            .options(
-                selectinload(ScheduleRequest.participants).selectinload(ScheduleRequestParticipant.user),
-                selectinload(ScheduleRequest.organizer),
-            )
-        ).one_or_none()
-        if schedule_request is None:
-            raise ValueError("Schedule request not found")
-
-        result = next((item for item in run.results if item.rank == rank), None)
-        if result is None:
-            raise ValueError("Ranked slot not found")
-
-        connection = self._require_connection(schedule_request.organizer_user_id)
-        self._ensure_connection_has_scope(
-            connection,
-            GOOGLE_WRITE_SCOPES,
-            "Google Calendar connection is missing write access. Reconnect Google and grant calendar access.",
-        )
-        access_token = self._ensure_access_token(connection)
-        target_calendar_id = calendar_id or connection.selected_write_calendar_id or "primary"
-
-        attendee_emails = []
-        for participant in schedule_request.participants:
-            if participant.user_id == schedule_request.organizer_user_id:
-                continue
-            if participant.user and participant.user.email:
-                attendee_emails.append(participant.user.email)
-
-        return self.client.create_event(
-            access_token=access_token,
-            calendar_id=target_calendar_id,
-            title=schedule_request.title,
-            start_at=ensure_utc(result.start_at),
-            end_at=ensure_utc(result.end_at),
-            timezone_name=schedule_request.organizer.timezone,
-            attendee_emails=attendee_emails,
-            description="Created by the AI scheduler demo app.",
         )
 
     def create_event_for_practice_session(

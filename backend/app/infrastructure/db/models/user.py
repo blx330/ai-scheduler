@@ -31,10 +31,6 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
-    preference_inputs = relationship("UserPreferenceInput", back_populates="user", cascade="all, delete-orphan")
-    parsed_preferences = relationship("UserParsedPreference", back_populates="user", cascade="all, delete-orphan")
-    organized_schedule_requests = relationship("ScheduleRequest", back_populates="organizer")
-    schedule_request_participations = relationship("ScheduleRequestParticipant", back_populates="user")
     organized_dance_events = relationship("DanceEvent", back_populates="organizer")
     dance_event_participations = relationship("DanceEventParticipant", back_populates="user")
     calendar_connections = relationship("CalendarConnection", back_populates="user", cascade="all, delete-orphan")

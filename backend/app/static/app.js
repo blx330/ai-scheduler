@@ -414,30 +414,6 @@ async function requestPlanningRun(startIso, endIso) {
     slot_step_minutes: 60,
   };
 
-  const eventDebugSummary = state.events
-    .filter((dance) => eventIds.includes(dance.id))
-    .map((dance) => ({
-      event_id: dance.id,
-      dance_name: dance.name,
-      participant_ids: (dance.participants || []).map((participant) => participant.user_id),
-      required_participant_ids: (dance.participants || [])
-        .filter((participant) => participant.role === "required")
-        .map((participant) => participant.user_id),
-      optional_participant_ids: (dance.participants || [])
-        .filter((participant) => participant.role === "optional")
-        .map((participant) => participant.user_id),
-      duration_minutes: dance.duration_minutes,
-      earliest_start_date: dance.earliest_start_date,
-      min_days_apart: dance.min_days_apart,
-      required_session_count: dance.required_session_count,
-      remaining_session_count: dance.remaining_session_count,
-      latest_schedule_at: dance.latest_schedule_at,
-      status: dance.status,
-    }));
-
-  console.log("POST /api/v1/planning-runs body", payload);
-  console.log("Planning run event context (derived from selected event_ids)", eventDebugSummary);
-
   state.planningRun = await apiFetch("/planning-runs", {
     method: "POST",
     body: JSON.stringify(payload),

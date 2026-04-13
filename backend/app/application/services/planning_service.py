@@ -14,7 +14,6 @@ from app.api.schemas.planning import PlanningRunCreate
 from app.domain.availability.interval_ops import build_effective_availability
 from app.domain.common.datetime_utils import ensure_utc
 from app.domain.preferences.models import (
-    ParsedPreference,
     merge_cached_practice_preference,
     merge_preferred_practice_time,
 )
@@ -33,7 +32,6 @@ from app.infrastructure.db.models import (
     PracticeSession,
     Room,
     User,
-    UserParsedPreference,
 )
 from app.application.services.google_calendar_service import GoogleCalendarService
 
@@ -369,18 +367,6 @@ class PlanningService:
         ):
             busy_by_user[interval.user_id].append(interval)
 
-        preference_rows = list(
-            self.db.scalars(
-                select(UserParsedPreference)
-                .where(UserParsedPreference.user_id.in_(all_user_ids))
-                .order_by(UserParsedPreference.created_at.desc())
-            )
-        )
-        preferences_by_user: dict[UUID, ParsedPreference] = {}
-        for row in preference_rows:
-            if row.user_id not in preferences_by_user:
-                preferences_by_user[row.user_id] = ParsedPreference.model_validate(row.constraints_json)
-
         event_inputs: list[PlanningEventInput] = []
         for event in events:
             confirmed_count = _count_confirmed_sessions(event.practice_sessions)
@@ -413,7 +399,7 @@ class PlanningService:
                 )
                 merged_preference = merge_preferred_practice_time(
                     merge_cached_practice_preference(
-                        preferences_by_user.get(participant.user_id),
+                        None,
                         user.timezone,
                         user.preferred_practice_time_parsed,
                     ),
@@ -435,7 +421,7 @@ class PlanningService:
                 raise ValueError("Event organizer not found")
             organizer_preference = merge_preferred_practice_time(
                 merge_cached_practice_preference(
-                    preferences_by_user.get(organizer.id),
+                    None,
                     organizer.timezone,
                     organizer.preferred_practice_time_parsed,
                 ),

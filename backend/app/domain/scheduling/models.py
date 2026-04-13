@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, time
-from typing import Optional, Union
+from datetime import datetime, timedelta
+from typing import Union
 from uuid import UUID
 
 from app.domain.availability.models import Interval
@@ -16,20 +16,6 @@ class ParticipantContext:
     timezone: str
     effective_availability: list[Interval]
     preference: Optional[ParsedPreference] = None
-
-
-@dataclass(frozen=True)
-class ScheduleInput:
-    schedule_request_id: UUID
-    title: str
-    organizer_timezone: str
-    duration_minutes: int
-    horizon_start: datetime
-    horizon_end: datetime
-    slot_step_minutes: int
-    daily_window_start_local: Optional[time]
-    daily_window_end_local: Optional[time]
-    participants: list[ParticipantContext]
 
 
 @dataclass(frozen=True)
@@ -63,11 +49,3 @@ class ScheduleResult:
     required_participants_satisfied: bool
     optional_available_count: int
     participant_statuses: list[ScheduleParticipantStatus] = field(default_factory=list)
-
-
-@dataclass
-class ScheduleRunView:
-    id: UUID
-    schedule_request_id: UUID
-    status: str
-    results: list[ScheduleResult]
