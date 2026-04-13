@@ -89,6 +89,14 @@ class GoogleCalendarProvider(Protocol):
     ) -> GoogleCreatedEvent:
         ...
 
+    def delete_event(
+        self,
+        access_token: str,
+        calendar_id: str,
+        event_id: str,
+    ) -> None:
+        ...
+
 
 class GoogleCalendarClient:
     def __init__(self, client_id: str, client_secret: str, redirect_uri: str) -> None:
@@ -234,6 +242,21 @@ class GoogleCalendarClient:
             end_at=_parse_google_datetime(payload["end"]["dateTime"]),
         )
 
+    def delete_event(
+        self,
+        access_token: str,
+        calendar_id: str,
+        event_id: str,
+    ) -> None:
+        encoded_calendar_id = quote(calendar_id, safe="")
+        encoded_event_id = quote(event_id, safe="")
+        response = self._requests().delete(
+            f"{GOOGLE_EVENTS_URL_TEMPLATE.format(calendar_id=encoded_calendar_id)}/{encoded_event_id}",
+            headers=self._auth_headers(access_token),
+            timeout=30,
+        )
+        self._raise_for_google_error(response, "Google Calendar event deletion")
+
     @staticmethod
     def _requests():
         try:
@@ -327,6 +350,14 @@ class NoopGoogleCalendarProvider:
         attendee_emails: list[str],
         description: str | None = None,
     ) -> GoogleCreatedEvent:
+        raise RuntimeError("Google Calendar is not configured")
+
+    def delete_event(
+        self,
+        access_token: str,
+        calendar_id: str,
+        event_id: str,
+    ) -> None:
         raise RuntimeError("Google Calendar is not configured")
 
 

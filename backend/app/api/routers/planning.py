@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
+from app.api.deps import get_db, get_google_calendar_client, get_settings
 from app.api.routers._planning_serializers import (
     serialize_busy_interval,
     serialize_planning_run,
@@ -17,8 +17,11 @@ from app.api.schemas.planning import (
     PlanningRunCreate,
     PlanningRunRead,
 )
+from app.application.services.google_calendar_service import GoogleCalendarService
 from app.application.services.planning_service import PlanningService
 from app.domain.common.datetime_utils import ensure_utc
+from app.infrastructure.config import Settings
+from app.infrastructure.integrations.google_calendar.client import GoogleCalendarProvider
 
 router = APIRouter(tags=["planning"])
 
@@ -48,9 +51,15 @@ def confirm_planning_results(
     run_id: UUID,
     payload: PlanningRunConfirmRequest,
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    client: GoogleCalendarProvider = Depends(get_google_calendar_client),
 ) -> PlanningRunConfirmResponse:
     try:
-        run, confirmed_sessions = PlanningService(db).confirm_results(run_id, payload.result_ids)
+        run, confirmed_sessions = PlanningService(db).confirm_results(
+            run_id,
+            payload.result_ids,
+            google_calendar_service=GoogleCalendarService(db, settings, client),
+        )
     except ValueError as exc:
         message = str(exc)
         status_code = 404 if message == "Planning run not found" else 400

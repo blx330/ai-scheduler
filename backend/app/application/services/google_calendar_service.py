@@ -19,6 +19,9 @@ from app.infrastructure.config import Settings
 from app.infrastructure.db.models import (
     CalendarBusyInterval,
     CalendarConnection,
+    DanceEvent,
+    DanceEventParticipant,
+    PracticeSession,
     ScheduleRequest,
     ScheduleRequestParticipant,
     ScheduleRun,
@@ -277,6 +280,86 @@ class GoogleCalendarService:
             attendee_emails=attendee_emails,
             description="Created by the AI scheduler demo app.",
         )
+
+    def create_event_for_practice_session(
+        self,
+        practice_session_id: UUID,
+        calendar_id: str | None = None,
+    ) -> GoogleCreatedEvent:
+        practice_session = self.db.scalars(
+            select(PracticeSession)
+            .where(PracticeSession.id == practice_session_id)
+            .options(
+                selectinload(PracticeSession.dance_event).selectinload(DanceEvent.organizer),
+                selectinload(PracticeSession.dance_event)
+                .selectinload(DanceEvent.participants)
+                .selectinload(DanceEventParticipant.user),
+            )
+        ).one_or_none()
+        if practice_session is None:
+            raise ValueError("Practice session not found")
+
+        dance_event = practice_session.dance_event
+        connection = self._require_connection(dance_event.organizer_user_id)
+        self._ensure_connection_has_scope(
+            connection,
+            GOOGLE_WRITE_SCOPES,
+            "Google Calendar connection is missing write access. Reconnect Google and grant calendar access.",
+        )
+        access_token = self._ensure_access_token(connection)
+        target_calendar_id = calendar_id or connection.selected_write_calendar_id or "primary"
+
+        attendee_emails = []
+        for participant in dance_event.participants:
+            if participant.user_id == dance_event.organizer_user_id:
+                continue
+            if participant.user and participant.user.email:
+                attendee_emails.append(participant.user.email)
+
+        created_event = self.client.create_event(
+            access_token=access_token,
+            calendar_id=target_calendar_id,
+            title=f"{dance_event.name} Practice {practice_session.session_index}",
+            start_at=ensure_utc(practice_session.start_at),
+            end_at=ensure_utc(practice_session.end_at),
+            timezone_name=dance_event.organizer.timezone,
+            attendee_emails=attendee_emails,
+            description="Created by the AI scheduler demo app.",
+        )
+
+        practice_session.google_calendar_event_id = created_event.event_id
+        practice_session.google_calendar_id = created_event.calendar_id
+        practice_session.google_calendar_html_link = created_event.html_link
+        self.db.add(practice_session)
+        self.db.commit()
+        self.db.refresh(practice_session)
+        return created_event
+
+    def delete_event_for_practice_session(self, practice_session_id: UUID) -> bool:
+        practice_session = self.db.scalars(
+            select(PracticeSession)
+            .where(PracticeSession.id == practice_session_id)
+            .options(selectinload(PracticeSession.dance_event).selectinload(DanceEvent.organizer))
+        ).one_or_none()
+        if practice_session is None:
+            raise ValueError("Practice session not found")
+        if not practice_session.google_calendar_event_id:
+            return False
+
+        connection = self._require_connection(practice_session.dance_event.organizer_user_id)
+        self._ensure_connection_has_scope(
+            connection,
+            GOOGLE_WRITE_SCOPES,
+            "Google Calendar connection is missing write access. Reconnect Google and grant calendar access.",
+        )
+        access_token = self._ensure_access_token(connection)
+        target_calendar_id = practice_session.google_calendar_id or connection.selected_write_calendar_id or "primary"
+        self.client.delete_event(
+            access_token=access_token,
+            calendar_id=target_calendar_id,
+            event_id=practice_session.google_calendar_event_id,
+        )
+        return True
 
     def _ensure_access_token(self, connection: CalendarConnection) -> str:
         if connection.access_token and connection.token_expires_at:

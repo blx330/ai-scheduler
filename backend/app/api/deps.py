@@ -6,6 +6,10 @@ from sqlalchemy.orm import Session
 from app.infrastructure.config import Settings
 from app.infrastructure.integrations.google_calendar.client import GoogleCalendarProvider
 from app.infrastructure.integrations.llm.parser import PreferenceParser, build_preference_parser
+from app.infrastructure.integrations.llm.profile_preference_parser import (
+    UserProfilePreferenceParser,
+    build_user_profile_preference_parser,
+)
 
 
 def get_settings(request: Request) -> Settings:
@@ -30,6 +34,14 @@ def get_preference_parser(request: Request) -> PreferenceParser:
         settings.parser_mode,
         api_key=settings.groq_api_key or settings.feather_api_key,
     )
+
+
+def get_user_profile_preference_parser(request: Request) -> UserProfilePreferenceParser:
+    parser = getattr(request.app.state, "user_profile_preference_parser", None)
+    if parser is not None:
+        return parser
+    settings = get_settings(request)
+    return build_user_profile_preference_parser(api_key=settings.groq_api_key)
 
 
 def get_google_calendar_client(request: Request) -> GoogleCalendarProvider:

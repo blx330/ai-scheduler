@@ -880,6 +880,28 @@ p {
   gap: 10px;
 }
 
+.settings-save-button {
+  justify-self: start;
+}
+
+.preference-preview {
+  padding: 10px 12px;
+  border-radius: var(--radius-card);
+  border: 1px solid rgba(79, 70, 229, 0.14);
+  background: rgba(79, 70, 229, 0.08);
+  color: #3730a3;
+  font-size: 0.88rem;
+  line-height: 1.4;
+  display: grid;
+  gap: 4px;
+}
+
+.preference-preview strong {
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .participant-selector-list {
   display: grid;
   gap: 10px;
@@ -893,6 +915,33 @@ p {
   padding: 10px 12px;
   border-radius: var(--radius-card);
   background: var(--panel-alt);
+}
+
+.modal-practice-list {
+  display: grid;
+  gap: 10px;
+}
+
+.practice-manage-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-card);
+  background: var(--panel-alt);
+}
+
+.practice-manage-meta {
+  display: grid;
+  gap: 3px;
+}
+
+.practice-manage-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .modal-overlay {

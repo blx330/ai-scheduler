@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 from uuid import UUID
 
@@ -32,6 +32,8 @@ class DanceEventCreate(BaseModel):
     description: Optional[str] = None
     organizer_user_id: UUID
     duration_minutes: int
+    earliest_start_date: Optional[date] = None
+    min_days_apart: int = 0
     latest_schedule_at: datetime
     required_session_count: int
     participants: list[DanceEventParticipantCreate]
@@ -43,9 +45,16 @@ class DanceEventCreate(BaseModel):
         assert validated is not None
         return validated
 
-    @field_validator("duration_minutes", "required_session_count")
+    @field_validator("duration_minutes", "required_session_count", "min_days_apart")
     @classmethod
     def validate_positive(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("Value must be zero or positive")
+        return value
+
+    @field_validator("duration_minutes", "required_session_count")
+    @classmethod
+    def validate_strict_positive(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("Value must be positive")
         return value
@@ -56,6 +65,8 @@ class DanceEventUpdate(BaseModel):
     description: Optional[str] = None
     organizer_user_id: Optional[UUID] = None
     duration_minutes: Optional[int] = None
+    earliest_start_date: Optional[date] = None
+    min_days_apart: Optional[int] = None
     latest_schedule_at: Optional[datetime] = None
     required_session_count: Optional[int] = None
     status: Optional[str] = None
@@ -71,6 +82,13 @@ class DanceEventUpdate(BaseModel):
     def validate_positive(cls, value: Optional[int]) -> Optional[int]:
         if value is not None and value <= 0:
             raise ValueError("Value must be positive")
+        return value
+
+    @field_validator("min_days_apart")
+    @classmethod
+    def validate_min_days_apart(cls, value: Optional[int]) -> Optional[int]:
+        if value is not None and value < 0:
+            raise ValueError("Minimum days apart must be zero or positive")
         return value
 
     @field_validator("status")
@@ -96,6 +114,8 @@ class DanceEventRead(BaseModel):
     description: Optional[str]
     organizer_user_id: UUID
     duration_minutes: int
+    earliest_start_date: Optional[date]
+    min_days_apart: int
     latest_schedule_at: datetime
     required_session_count: int
     confirmed_session_count: int

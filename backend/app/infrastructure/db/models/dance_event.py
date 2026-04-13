@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.db.base import Base
@@ -24,6 +24,8 @@ class DanceEvent(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     organizer_user_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    earliest_start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    min_days_apart: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     latest_schedule_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     required_session_count: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="unscheduled")
@@ -133,6 +135,9 @@ class PracticeSession(Base):
         ForeignKey("planning_runs.id", ondelete="SET NULL"),
         nullable=True,
     )
+    google_calendar_event_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    google_calendar_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    google_calendar_html_link: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     total_score: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
     is_fallback: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     missing_required_user_ids_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
