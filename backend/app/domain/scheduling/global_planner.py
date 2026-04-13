@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import logging
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -18,6 +19,8 @@ SAME_DAY_PRACTICE_PENALTY = -0.35
 BACK_TO_BACK_PENALTY = -0.5
 FALLBACK_MISSING_REQUIRED_PENALTY = -2.5
 BACK_TO_BACK_WINDOW = timedelta(minutes=15)
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -228,6 +231,14 @@ def _build_candidates(
 ) -> list[PlanningRecommendation]:
     horizon_end = min(ensure_utc(planning_horizon_end), ensure_utc(event.latest_schedule_at))
     if horizon_end <= ensure_utc(planning_horizon_start):
+        logger.info(
+            "planning candidates skipped event=%s session_index=%s reason=empty_horizon horizon_start=%s horizon_end=%s latest_schedule_at=%s",
+            event.dance_event_id,
+            session_index,
+            ensure_utc(planning_horizon_start),
+            horizon_end,
+            ensure_utc(event.latest_schedule_at),
+        )
         return []
 
     participant_adjustments = _participant_reservation_intervals(event.participants, reservations)
@@ -256,9 +267,15 @@ def _build_candidates(
     )
 
     recommendations: list[PlanningRecommendation] = []
+    rejection_counts = {
+        "room_conflict": 0,
+        "missing_required_over_limit": 0,
+        "fallback_wrong_missing_required_count": 0,
+    }
     for start_at in candidate_starts:
         slot = ScheduleSlot.from_start(start_at=start_at, duration_minutes=event.duration_minutes)
         if _room_conflict(slot, room_id, reservations):
+            rejection_counts["room_conflict"] += 1
             continue
 
         base_result = score_slot(slot, adjusted_participants)
@@ -268,8 +285,10 @@ def _build_candidates(
             if status.role == "required" and not status.available
         )
         if len(missing_required_user_ids) > allowed_missing_required:
+            rejection_counts["missing_required_over_limit"] += 1
             continue
         if allowed_missing_required == 1 and len(missing_required_user_ids) != 1:
+            rejection_counts["fallback_wrong_missing_required_count"] += 1
             continue
 
         score_breakdown, explanation = _build_scoring_metadata(
@@ -299,6 +318,18 @@ def _build_candidates(
                 participant_statuses=base_result.participant_statuses,
             )
         )
+    logger.info(
+        "planning candidates event=%s session_index=%s allowed_missing_required=%s generated_slots=%s accepted=%s rejections=%s horizon_start=%s horizon_end=%s duration_minutes=%s",
+        event.dance_event_id,
+        session_index,
+        allowed_missing_required,
+        len(candidate_starts),
+        len(recommendations),
+        rejection_counts,
+        ensure_utc(planning_horizon_start),
+        horizon_end,
+        event.duration_minutes,
+    )
     return recommendations
 
 

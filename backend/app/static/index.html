@@ -4,136 +4,196 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Dance Practice Scheduler</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <main class="shell">
-      <header class="topbar">
-        <div class="topbar-copy">
-          <p class="eyebrow">AI Dance Practice Scheduler</p>
-          <h1>Dance Practice Scheduler</h1>
-          <p class="subtle">
-            Multi-event practice planning with confirmed sessions, calendar context, and AI-ranked recommendations.
-          </p>
+    <div id="flash" class="toast hidden" role="status" aria-live="polite"></div>
+
+    <div id="app" class="app-shell">
+      <header id="main-header" class="app-header panel">
+        <div class="header-copy">
+          <div class="header-title-row">
+            <div>
+              <h1>Dance Practice Scheduler</h1>
+              <p id="header-week-range" class="secondary-text">Apr 6 - Apr 12</p>
+            </div>
+            <span id="selected-dance-pill" class="dance-pill hidden"></span>
+          </div>
         </div>
-        <div class="topbar-actions">
-          <button id="open-settings" class="secondary">Calendar Settings</button>
-          <button id="refresh-dashboard" class="secondary">Refresh data</button>
+
+        <div class="header-actions">
+          <div id="connection-badge" class="connection-badge">
+            <span class="status-dot"></span>
+            <span id="connection-badge-text">Google Calendar not connected</span>
+          </div>
+
+          <button id="open-settings" type="button" class="secondary-button">Calendar Settings</button>
+          <button id="refresh-dashboard" type="button" class="secondary-button">Refresh</button>
+
+          <div class="week-nav">
+            <button id="week-prev" type="button" class="secondary-button icon-button" aria-label="Previous week">
+              &larr;
+            </button>
+            <button id="week-today" type="button" class="secondary-button">Today</button>
+            <button id="week-next" type="button" class="secondary-button icon-button" aria-label="Next week">
+              &rarr;
+            </button>
+          </div>
         </div>
       </header>
 
-      <div id="flash" class="flash hidden"></div>
-
-      <section class="scheduler-layout">
-        <aside class="panel sidebar-panel">
-          <div class="panel-head">
-            <div>
-              <h2>Dances</h2>
-              <p class="subtle">Global planning stays on. Focus a dance to inspect its schedule and recommendations.</p>
-            </div>
-            <button id="open-add-dance">Add dance</button>
-          </div>
-
-          <div class="sidebar-scroll">
-            <button id="clear-dance-filter" class="secondary small hidden">Clear focused dance</button>
-
-            <div id="events-list" class="stack"></div>
-
-            <div class="participants-section">
-              <div class="section-title">
-                <div>
-                  <h3>Participants</h3>
-                  <span class="subtle tiny">Calendar visibility only</span>
-                </div>
-                <button id="open-settings-sidebar" class="secondary small">Manage People</button>
+      <div id="main-layout" class="workspace">
+        <aside id="left-sidebar" class="panel sidebar">
+          <section class="sidebar-section">
+            <div class="section-heading">
+              <div>
+                <h2>Actions</h2>
+                <p class="secondary-text">Create dances and keep people organized.</p>
               </div>
-              <div id="participants-list" class="stack compact-stack"></div>
             </div>
-          </div>
+
+            <div class="action-stack">
+              <button id="open-add-dance" type="button" class="primary-button full-width">Add dance</button>
+              <button id="open-add-participant" type="button" class="secondary-button full-width">Add participant</button>
+              <button id="open-manage-people" type="button" class="secondary-button full-width">Manage people</button>
+            </div>
+          </section>
+
+          <section class="sidebar-section dances-section">
+            <div class="section-heading">
+              <div>
+                <h2>Dances</h2>
+                <p class="secondary-text">Select a dance to focus one practice at a time.</p>
+              </div>
+            </div>
+
+            <div id="dances-list" class="dance-list"></div>
+          </section>
+
+          <section class="sidebar-section participants-panel">
+            <div class="section-heading">
+              <div>
+                <h2>Participants</h2>
+                <p class="secondary-text">Toggle busy overlays without removing people from a dance.</p>
+              </div>
+            </div>
+
+            <div id="participants-list" class="participants-scroll"></div>
+          </section>
         </aside>
 
-        <section class="panel calendar-panel">
-          <div class="calendar-toolbar">
-            <div>
-              <h2>Weekly Calendar</h2>
-              <p class="subtle">Busy intervals, confirmed practices, and live recommendations</p>
-            </div>
-            <div class="calendar-nav">
-              <button id="week-prev" class="secondary icon-button" aria-label="Previous week">&larr;</button>
-              <button id="week-today" class="secondary">Today</button>
-              <button id="week-next" class="secondary icon-button" aria-label="Next week">&rarr;</button>
-              <span id="week-label" class="week-label"></span>
-            </div>
-          </div>
-          <div class="calendar-frame">
-            <div id="calendar" class="calendar-shell"></div>
-          </div>
-        </section>
+        <main id="calendar-panel" class="calendar-column">
+          <div class="panel calendar-panel">
+            <div class="calendar-toolbar">
+              <div>
+                <h2>Week Calendar</h2>
+                <p id="calendar-subtitle" class="secondary-text">Busy overlays, suggested slots, and confirmed practices.</p>
+              </div>
 
-        <aside class="panel recommendations-panel">
-          <div class="panel-head">
-            <div>
-              <h2>AI Recommendations</h2>
-              <p id="recommendations-subtitle" class="subtle">Select a dance to inspect the current planning run.</p>
+              <label class="edit-mode-toggle">
+                <input id="confirmed-edit-toggle" type="checkbox" />
+                <span>Edit confirmed blocks</span>
+              </label>
+            </div>
+
+            <div id="calendar-edit-note" class="inline-note hidden">
+              Edit Mode is preview-only right now. The current backend does not expose a confirmed-session update endpoint.
+            </div>
+
+            <div id="calendar-scroll" class="calendar-scroll">
+              <div id="calendar" class="calendar-shell"></div>
             </div>
           </div>
-          <div id="recommendations" class="stack recommendations-scroll"></div>
+        </main>
+
+        <aside id="right-sidebar" class="panel right-sidebar">
+          <section class="workflow-section">
+            <div class="section-heading tight">
+              <div>
+                <h2>Selected Dance</h2>
+                <p class="secondary-text">The right panel stays focused on one practice at a time.</p>
+              </div>
+            </div>
+            <div id="selected-dance-summary" class="summary-card"></div>
+          </section>
+
+          <section class="workflow-section">
+            <button id="schedule-practice" type="button" class="primary-button full-width">Schedule practice</button>
+            <p id="schedule-practice-hint" class="secondary-text compact-copy">Select a dance from the left.</p>
+          </section>
+
+          <section class="workflow-section suggestions-section">
+            <div class="section-heading tight">
+              <div>
+                <h2>Suggested Slots</h2>
+                <p class="secondary-text">Top 3 options for the active practice.</p>
+              </div>
+            </div>
+            <div id="suggested-slots" class="suggestions-list"></div>
+          </section>
+
+          <section id="selected-slot-section" class="workflow-section hidden">
+            <div class="section-heading tight">
+              <div>
+                <h2>Selected Slot</h2>
+                <p class="secondary-text">Adjust the preview before confirmation.</p>
+              </div>
+            </div>
+
+            <div id="selected-slot-editor" class="editor-card"></div>
+            <div id="selected-slot-note" class="inline-note hidden"></div>
+            <button id="confirm-slot" type="button" class="primary-button full-width">Confirm slot</button>
+          </section>
         </aside>
-      </section>
-    </main>
+      </div>
+    </div>
 
     <div id="modal-overlay" class="modal-overlay hidden"></div>
 
-    <section id="settings-modal" class="modal drawer-modal hidden" aria-hidden="true">
+    <section id="settings-modal" class="modal modal-wide hidden" aria-hidden="true">
       <div class="modal-head">
         <div>
-          <p class="eyebrow">Connections</p>
+          <p class="eyebrow">People & Calendars</p>
           <h2>Calendar Settings</h2>
-          <p class="subtle">Manage participants, Google calendars, and visible-week busy sync without crowding the main scheduler.</p>
+          <p class="secondary-text">Create participants, connect Google Calendar, and choose busy-source calendars.</p>
         </div>
-        <button id="close-settings-modal" class="secondary icon-button" aria-label="Close settings modal">&times;</button>
+        <button id="close-settings-modal" type="button" class="secondary-button icon-button" aria-label="Close settings">
+          &times;
+        </button>
       </div>
 
-      <div class="drawer-content">
-        <form id="user-form" class="grid-form compact-form settings-form">
-          <label>
-            Display name
-            <input id="display-name" required type="text" placeholder="Alice" />
-          </label>
-          <label>
-            Email
-            <input id="email" type="email" placeholder="alice@example.com" />
-          </label>
-          <label>
-            Timezone
-            <input id="timezone" required type="text" />
-          </label>
-          <button type="submit">Create participant</button>
-        </form>
+      <form id="user-form" class="form-grid">
+        <label>
+          Display name
+          <input id="display-name" required type="text" placeholder="Cindy" />
+        </label>
+        <label>
+          Email
+          <input id="email" type="email" placeholder="cindy@example.com" />
+        </label>
+        <label>
+          Timezone
+          <input id="timezone" required type="text" placeholder="America/New_York" />
+        </label>
+        <button id="submit-user" type="submit" class="primary-button align-end">Add participant</button>
+      </form>
 
-        <section class="stack">
-          <div class="section-title">
-            <div>
-              <h3>People & Connections</h3>
-              <span class="subtle tiny">Connect Google, choose busy-source calendars, and sync the visible week.</span>
-            </div>
-          </div>
-          <div id="users-list" class="stack settings-list"></div>
-        </section>
-      </div>
+      <div id="users-list" class="settings-list"></div>
     </section>
 
     <section id="add-dance-modal" class="modal hidden" aria-hidden="true">
       <div class="modal-head">
         <div>
           <p id="dance-modal-eyebrow" class="eyebrow">Dance Setup</p>
-          <h2 id="dance-modal-title">Add New Dance</h2>
-          <p id="dance-modal-subtitle" class="subtle">Create a dance event for the multi-practice planner.</p>
+          <h2 id="dance-modal-title">Add dance</h2>
+          <p id="dance-modal-subtitle" class="secondary-text">Create a dance and choose who needs to attend.</p>
         </div>
-        <button id="close-add-dance" class="secondary icon-button" aria-label="Close add dance modal">&times;</button>
+        <button id="close-add-dance" type="button" class="secondary-button icon-button" aria-label="Close add dance">
+          &times;
+        </button>
       </div>
 
-      <form id="add-dance-form" class="grid-form">
+      <form id="add-dance-form" class="form-grid">
         <label>
           Dance name
           <input id="dance-name" required type="text" placeholder="Contemporary Fusion" />
@@ -144,79 +204,36 @@
         </label>
         <label>
           Duration (hours)
-          <input id="dance-duration-hours" required min="0.5" step="0.5" type="number" value="2" />
+          <input id="dance-duration-hours" required min="0.5" step="0.5" type="number" value="1" />
         </label>
         <label>
           Deadline
           <input id="dance-deadline" required type="date" />
         </label>
-        <label class="full-width">
+        <label class="full-span">
           Notes
-          <textarea id="dance-description" rows="3" placeholder="Optional rehearsal notes or showcase context"></textarea>
+          <textarea id="dance-description" rows="3" placeholder="Optional rehearsal context"></textarea>
         </label>
 
-        <div class="full-width">
-          <div class="section-title">
-            <h3>Participants</h3>
-            <span class="subtle tiny">Choose required, optional, or ignore</span>
+        <div class="full-span">
+          <div class="section-heading tight">
+            <div>
+              <h2>Participants</h2>
+              <p class="secondary-text">Mark each person as required, optional, or ignore.</p>
+            </div>
           </div>
           <div id="add-dance-participants" class="participant-selector-list"></div>
         </div>
 
         <div id="add-dance-error" class="inline-error hidden"></div>
 
-        <div class="modal-actions full-width">
-          <div id="dance-edit-actions" class="row hidden">
-            <button id="duplicate-dance" type="button" class="secondary">Duplicate</button>
-            <button id="toggle-dance-status" type="button" class="secondary">Mark complete</button>
-            <button id="archive-dance" type="button" class="secondary">Archive</button>
-            <button id="delete-dance" type="button" class="danger-ghost">Delete</button>
-          </div>
-          <div class="row">
-            <button id="cancel-add-dance" type="button" class="secondary">Cancel</button>
-            <button id="submit-add-dance" type="submit">Create dance</button>
-          </div>
+        <div class="modal-actions full-span">
+          <button id="cancel-add-dance" type="button" class="secondary-button">Cancel</button>
+          <button id="submit-add-dance" type="submit" class="primary-button">Save dance</button>
         </div>
       </form>
     </section>
 
-    <section id="participant-modal" class="modal small-modal hidden" aria-hidden="true">
-      <div class="modal-head">
-        <div>
-          <p class="eyebrow">Participant</p>
-          <h2>Manage Participant</h2>
-          <p class="subtle">Visibility is handled in the sidebar. Use this panel for global app management.</p>
-        </div>
-        <button id="close-participant-modal" class="secondary icon-button" aria-label="Close participant modal">&times;</button>
-      </div>
-
-      <div id="participant-content" class="stack"></div>
-      <div id="participant-error" class="inline-error hidden"></div>
-
-      <div class="modal-actions">
-        <button id="cancel-participant" type="button" class="secondary">Close</button>
-        <button id="remove-participant" type="button" class="danger-ghost">Remove from app</button>
-      </div>
-    </section>
-
-    <section id="confirm-modal" class="modal hidden" aria-hidden="true">
-      <div class="modal-head">
-        <div>
-          <h2>Confirm Practice</h2>
-          <p class="subtle">This will persist the session and make it a hard scheduling constraint.</p>
-        </div>
-        <button id="close-confirm-modal" class="secondary icon-button" aria-label="Close confirm modal">&times;</button>
-      </div>
-
-      <div id="confirm-content" class="stack"></div>
-      <div id="confirm-error" class="inline-error hidden"></div>
-
-      <div class="modal-actions">
-        <button id="cancel-confirm" type="button" class="secondary">Cancel</button>
-        <button id="submit-confirm" type="button">Confirm session</button>
-      </div>
-    </section>
-
-    <script src="/app.js" defer></script>
+    <script src="./app.js" defer></script>
   </body>
 </html>

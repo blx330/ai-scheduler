@@ -1,20 +1,19 @@
 const PARTICIPANT_COLORS = [
-  "#f6d6ea",
-  "#d9e7ff",
-  "#fde2c5",
-  "#d9f7e8",
-  "#f8f2c7",
-  "#e3d7fb",
-  "#f8d4e6",
-  "#d7f5f5",
-  "#f7ddcf",
-  "#d8ecdd",
+  "#d9c8ff",
+  "#cfe3ff",
+  "#ffd7df",
+  "#d2f3df",
+  "#fde7c2",
+  "#d7edf8",
+  "#f8d6ef",
+  "#e4f3c7",
 ];
 
 const GRID_START_HOUR = 7;
 const GRID_END_HOUR = 24;
-const HOUR_ROW_HEIGHT = 84;
+const HOUR_ROW_HEIGHT = 72;
 const TOTAL_GRID_MINUTES = (GRID_END_HOUR - GRID_START_HOUR) * 60;
+const DEFAULT_ROOM_LABEL = "Not set";
 
 const state = {
   users: [],
@@ -27,63 +26,67 @@ const state = {
     busy_intervals: [],
     practice_sessions: [],
   },
-  focusedDanceId: null,
-  participantVisibility: {},
-  expandedDanceIds: {},
-  selectedRecommendation: null,
-  selectedParticipantId: null,
-  editingDanceId: null,
   weekStart: startOfWeek(new Date()),
+  selectedDanceId: null,
+  expandedDanceIds: {},
+  participantVisibility: {},
+  activePracticeKey: null,
+  selectedSuggestionId: null,
+  slotDrafts: {},
+  sessionLocationOverrides: {},
+  confirmedSessionDrafts: {},
+  editingDanceId: null,
+  focusedSettingsUserId: null,
+  focusedSettingsForm: false,
+  confirmedEditMode: false,
   isRefreshing: false,
+  dragState: null,
+  justFinishedDrag: false,
+  flashTimeoutId: null,
 };
 
 const flash = document.getElementById("flash");
+const headerWeekRange = document.getElementById("header-week-range");
+const selectedDancePill = document.getElementById("selected-dance-pill");
+const connectionBadge = document.getElementById("connection-badge");
+const connectionBadgeText = document.getElementById("connection-badge-text");
 const refreshDashboardButton = document.getElementById("refresh-dashboard");
-const openSettingsButton = document.getElementById("open-settings");
-const openSettingsSidebarButton = document.getElementById("open-settings-sidebar");
-const userForm = document.getElementById("user-form");
-const usersList = document.getElementById("users-list");
-const eventsList = document.getElementById("events-list");
+const calendarSubtitle = document.getElementById("calendar-subtitle");
+const calendarEditNote = document.getElementById("calendar-edit-note");
+
+const dancesList = document.getElementById("dances-list");
 const participantsList = document.getElementById("participants-list");
-const recommendations = document.getElementById("recommendations");
-const recommendationsSubtitle = document.getElementById("recommendations-subtitle");
+const selectedDanceSummary = document.getElementById("selected-dance-summary");
+const schedulePracticeButton = document.getElementById("schedule-practice");
+const schedulePracticeHint = document.getElementById("schedule-practice-hint");
+const suggestedSlots = document.getElementById("suggested-slots");
+const selectedSlotSection = document.getElementById("selected-slot-section");
+const selectedSlotEditor = document.getElementById("selected-slot-editor");
+const selectedSlotNote = document.getElementById("selected-slot-note");
+const confirmSlotButton = document.getElementById("confirm-slot");
+
 const calendar = document.getElementById("calendar");
-const weekLabel = document.getElementById("week-label");
-const openAddDanceButton = document.getElementById("open-add-dance");
-const clearDanceFilterButton = document.getElementById("clear-dance-filter");
+const calendarScroll = document.getElementById("calendar-scroll");
+const confirmedEditToggle = document.getElementById("confirmed-edit-toggle");
 
 const modalOverlay = document.getElementById("modal-overlay");
 const settingsModal = document.getElementById("settings-modal");
-const closeSettingsModalButton = document.getElementById("close-settings-modal");
-
 const danceModal = document.getElementById("add-dance-modal");
-const danceModalTitle = document.getElementById("dance-modal-title");
-const danceModalSubtitle = document.getElementById("dance-modal-subtitle");
-const danceModalEyebrow = document.getElementById("dance-modal-eyebrow");
+const usersList = document.getElementById("users-list");
+const userForm = document.getElementById("user-form");
+const timezoneInput = document.getElementById("timezone");
 const addDanceForm = document.getElementById("add-dance-form");
 const addDanceParticipants = document.getElementById("add-dance-participants");
 const addDanceError = document.getElementById("add-dance-error");
+const danceModalEyebrow = document.getElementById("dance-modal-eyebrow");
+const danceModalTitle = document.getElementById("dance-modal-title");
+const danceModalSubtitle = document.getElementById("dance-modal-subtitle");
 const submitDanceButton = document.getElementById("submit-add-dance");
-const danceEditActions = document.getElementById("dance-edit-actions");
-const duplicateDanceButton = document.getElementById("duplicate-dance");
-const toggleDanceStatusButton = document.getElementById("toggle-dance-status");
-const archiveDanceButton = document.getElementById("archive-dance");
-const deleteDanceButton = document.getElementById("delete-dance");
-
-const participantModal = document.getElementById("participant-modal");
-const participantContent = document.getElementById("participant-content");
-const participantError = document.getElementById("participant-error");
-const removeParticipantButton = document.getElementById("remove-participant");
-
-const confirmModal = document.getElementById("confirm-modal");
-const confirmContent = document.getElementById("confirm-content");
-const confirmError = document.getElementById("confirm-error");
-
-const timezoneInput = document.getElementById("timezone");
 
 bindStaticListeners();
+initialize();
 
-window.addEventListener("load", async () => {
+async function initialize() {
   timezoneInput.value = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   setDefaultDanceDeadline();
   showCallbackMessage();
@@ -93,19 +96,21 @@ window.addEventListener("load", async () => {
   } catch (error) {
     showFlash(error.message, true);
   }
-});
+}
 
 function bindStaticListeners() {
-  openSettingsButton.addEventListener("click", openSettingsModal);
-  openSettingsSidebarButton.addEventListener("click", openSettingsModal);
-  closeSettingsModalButton.addEventListener("click", closeModals);
+  document.getElementById("open-settings").addEventListener("click", () => openSettingsModal());
+  document.getElementById("open-manage-people").addEventListener("click", () => openSettingsModal());
+  document.getElementById("open-add-participant").addEventListener("click", () => openSettingsModal({ focusForm: true }));
+  document.getElementById("open-add-dance").addEventListener("click", openCreateDanceModal);
+  document.getElementById("close-settings-modal").addEventListener("click", closeModals);
+  document.getElementById("close-add-dance").addEventListener("click", closeModals);
+  document.getElementById("cancel-add-dance").addEventListener("click", closeModals);
+  modalOverlay.addEventListener("click", closeModals);
 
-  userForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try {
-      await createUser();
-    } catch (error) {
-      showFlash(error.message, true);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      closeModals();
     }
   });
 
@@ -118,52 +123,25 @@ function bindStaticListeners() {
     }
   });
 
-  document.getElementById("week-prev").addEventListener("click", async () => {
-    try {
-      state.weekStart = addDays(state.weekStart, -7);
-      await refreshSchedulerData();
-    } catch (error) {
-      showFlash(error.message, true);
-    }
-  });
-
+  document.getElementById("week-prev").addEventListener("click", () => moveWeek(-7));
   document.getElementById("week-today").addEventListener("click", async () => {
-    try {
-      state.weekStart = startOfWeek(new Date());
-      await refreshSchedulerData();
-    } catch (error) {
-      showFlash(error.message, true);
-    }
+    state.weekStart = startOfWeek(new Date());
+    await safeRefreshSchedulerData();
   });
+  document.getElementById("week-next").addEventListener("click", () => moveWeek(7));
 
-  document.getElementById("week-next").addEventListener("click", async () => {
-    try {
-      state.weekStart = addDays(state.weekStart, 7);
-      await refreshSchedulerData();
-    } catch (error) {
-      showFlash(error.message, true);
-    }
-  });
-
-  openAddDanceButton.addEventListener("click", openCreateDanceModal);
-  clearDanceFilterButton.addEventListener("click", () => {
-    state.focusedDanceId = null;
-    renderSidebar();
+  confirmedEditToggle.addEventListener("change", () => {
+    state.confirmedEditMode = confirmedEditToggle.checked;
+    calendarEditNote.classList.toggle("hidden", !state.confirmedEditMode);
     renderCalendar();
-    renderRecommendations();
   });
 
-  document.getElementById("close-add-dance").addEventListener("click", closeModals);
-  document.getElementById("cancel-add-dance").addEventListener("click", closeModals);
-  document.getElementById("close-confirm-modal").addEventListener("click", closeModals);
-  document.getElementById("cancel-confirm").addEventListener("click", closeModals);
-  document.getElementById("close-participant-modal").addEventListener("click", closeModals);
-  document.getElementById("cancel-participant").addEventListener("click", closeModals);
-  modalOverlay.addEventListener("click", closeModals);
-
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      closeModals();
+  userForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await createUser();
+    } catch (error) {
+      showFlash(error.message, true);
     }
   });
 
@@ -176,84 +154,57 @@ function bindStaticListeners() {
     }
   });
 
-  duplicateDanceButton.addEventListener("click", async () => {
-    if (!state.editingDanceId) {
+  dancesList.addEventListener("click", async (event) => {
+    const toggleButton = event.target.closest("[data-dance-toggle]");
+    if (toggleButton) {
+      const danceId = toggleButton.dataset.danceToggle;
+      state.expandedDanceIds[danceId] = !state.expandedDanceIds[danceId];
+      renderSidebar();
       return;
     }
-    try {
-      await duplicateDanceEvent(state.editingDanceId);
-    } catch (error) {
-      showInlineError(addDanceError, error.message);
+
+    const editButton = event.target.closest("[data-dance-edit]");
+    if (editButton) {
+      openEditDanceModal(editButton.dataset.danceEdit);
+      return;
+    }
+
+    const practiceButton = event.target.closest("[data-practice-select]");
+    if (practiceButton) {
+      const danceId = practiceButton.dataset.danceId;
+      const sessionIndex = Number(practiceButton.dataset.practiceSelect);
+      selectDance(danceId, { sessionIndex, keepSuggestion: false });
+      return;
+    }
+
+    const danceButton = event.target.closest("[data-dance-select]");
+    if (danceButton) {
+      selectDance(danceButton.dataset.danceSelect, { keepSuggestion: false });
     }
   });
 
-  toggleDanceStatusButton.addEventListener("click", async () => {
-    if (!state.editingDanceId) {
+  participantsList.addEventListener("click", (event) => {
+    const visibilityButton = event.target.closest("[data-toggle-visibility]");
+    if (visibilityButton) {
+      const userId = visibilityButton.dataset.toggleVisibility;
+      state.participantVisibility[userId] = state.participantVisibility[userId] === false;
+      renderCalendar();
+      renderParticipants();
       return;
     }
-    try {
-      const event = getEventById(state.editingDanceId);
-      if (!event) {
-        throw new Error("Dance not found.");
-      }
-      const nextStatus = getToggleDanceStatusValue(event);
-      await updateDanceStatus(event.id, nextStatus);
-    } catch (error) {
-      showInlineError(addDanceError, error.message);
-    }
-  });
 
-  archiveDanceButton.addEventListener("click", async () => {
-    if (!state.editingDanceId) {
-      return;
-    }
-    try {
-      const event = getEventById(state.editingDanceId);
-      if (!event) {
-        throw new Error("Dance not found.");
-      }
-      const nextStatus = event.status === "archived" ? deriveAutomaticEventStatus(event) : "archived";
-      await updateDanceStatus(event.id, nextStatus);
-    } catch (error) {
-      showInlineError(addDanceError, error.message);
-    }
-  });
-
-  deleteDanceButton.addEventListener("click", async () => {
-    if (!state.editingDanceId) {
-      return;
-    }
-    try {
-      await deleteDanceEvent(state.editingDanceId);
-    } catch (error) {
-      showInlineError(addDanceError, error.message);
-    }
-  });
-
-  document.getElementById("submit-confirm").addEventListener("click", async () => {
-    try {
-      await confirmRecommendation();
-    } catch (error) {
-      showInlineError(confirmError, error.message);
-    }
-  });
-
-  removeParticipantButton.addEventListener("click", async () => {
-    if (!state.selectedParticipantId) {
-      return;
-    }
-    try {
-      await removeParticipantFromApp(state.selectedParticipantId);
-    } catch (error) {
-      showInlineError(participantError, error.message);
+    const manageButton = event.target.closest("[data-manage-user]");
+    if (manageButton) {
+      openSettingsModal({ focusUserId: manageButton.dataset.manageUser });
     }
   });
 
   usersList.addEventListener("click", async (event) => {
-    const actionButton = event.target.closest("button[data-user-action]");
+    const actionButton = event.target.closest("[data-user-action]");
     if (!actionButton) {
       return;
     }
+
     const { userAction, userId } = actionButton.dataset;
     if (!userAction || !userId) {
       return;
@@ -276,7 +227,7 @@ function bindStaticListeners() {
       }
       if (userAction === "sync-busy") {
         const result = await syncBusyForUser(userId);
-        await refreshSchedulerData();
+        await safeRefreshSchedulerData();
         showFlash(`Synced ${result.synced_interval_count} busy intervals for the visible week.`);
       }
     } catch (error) {
@@ -284,135 +235,57 @@ function bindStaticListeners() {
     }
   });
 
-  eventsList.addEventListener("click", async (event) => {
-    const emptyAction = event.target.closest("button[data-empty-action]");
-    if (emptyAction?.dataset.emptyAction === "add-dance") {
-      openCreateDanceModal();
-      return;
-    }
+  // Make rebinding safe if initialization happens more than once.
+  schedulePracticeButton.removeEventListener("click", handleSchedulePracticeClick);
+  schedulePracticeButton.addEventListener("click", handleSchedulePracticeClick);
 
-    const focusButton = event.target.closest("button[data-event-focus]");
-    if (focusButton) {
-      const { eventId } = focusButton.dataset;
-      state.focusedDanceId = state.focusedDanceId === eventId ? null : eventId;
-      renderSidebar();
-      renderCalendar();
-      renderRecommendations();
+  suggestedSlots.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-select-suggestion]");
+    if (!button) {
       return;
     }
+    selectSuggestion(button.dataset.selectSuggestion);
+  });
 
-    const expandButton = event.target.closest("button[data-event-expand]");
-    if (expandButton) {
-      const { eventId } = expandButton.dataset;
-      state.expandedDanceIds[eventId] = !state.expandedDanceIds[eventId];
-      renderSidebar();
-      return;
-    }
+  selectedSlotEditor.addEventListener("input", handleSlotEditorChange);
+  selectedSlotEditor.addEventListener("change", handleSlotEditorChange);
 
-    const actionButton = event.target.closest("button[data-event-action]");
-    if (!actionButton) {
-      return;
-    }
-    const { eventAction, eventId } = actionButton.dataset;
-    if (!eventAction || !eventId) {
-      return;
-    }
-
+  confirmSlotButton.addEventListener("click", async () => {
     try {
-      if (eventAction === "edit") {
-        openEditDanceModal(eventId);
-        return;
-      }
-      if (eventAction === "duplicate") {
-        await duplicateDanceEvent(eventId);
-        return;
-      }
-      if (eventAction === "toggle-status") {
-        const danceEvent = getEventById(eventId);
-        if (!danceEvent) {
-          throw new Error("Dance not found.");
-        }
-        await updateDanceStatus(eventId, getToggleDanceStatusValue(danceEvent));
-        return;
-      }
-      if (eventAction === "archive") {
-        const danceEvent = getEventById(eventId);
-        if (!danceEvent) {
-          throw new Error("Dance not found.");
-        }
-        const nextStatus = danceEvent.status === "archived" ? deriveAutomaticEventStatus(danceEvent) : "archived";
-        await updateDanceStatus(eventId, nextStatus);
-        return;
-      }
-      if (eventAction === "delete") {
-        await deleteDanceEvent(eventId);
-      }
+      await confirmSelectedSlot();
     } catch (error) {
       showFlash(error.message, true);
     }
   });
 
-  participantsList.addEventListener("change", (event) => {
-    const toggle = event.target.closest("input[data-participant-toggle]");
-    if (!toggle) {
-      return;
-    }
-    state.participantVisibility[toggle.value] = toggle.checked;
-    renderCalendar();
-  });
-
-  participantsList.addEventListener("click", (event) => {
-    const emptyAction = event.target.closest("button[data-empty-action]");
-    if (emptyAction?.dataset.emptyAction === "settings") {
-      openSettingsModal();
-      return;
-    }
-
-    const manageButton = event.target.closest("button[data-participant-manage]");
-    if (!manageButton) {
-      return;
-    }
-    openParticipantModal(manageButton.dataset.participantManage);
-  });
-
-  recommendations.addEventListener("click", (event) => {
-    const emptyAction = event.target.closest("button[data-empty-action]");
-    if (emptyAction?.dataset.emptyAction === "add-dance") {
-      openCreateDanceModal();
-      return;
-    }
-
-    const focusButton = event.target.closest("button[data-focus-dance]");
-    if (focusButton) {
-      state.focusedDanceId = focusButton.dataset.focusDance;
-      renderSidebar();
-      renderCalendar();
-      renderRecommendations();
-      return;
-    }
-
-    const actionButton = event.target.closest("button[data-result-id]");
-    if (!actionButton) {
-      return;
-    }
-    const recommendation = getRecommendationById(actionButton.dataset.resultId);
-    if (!recommendation) {
-      return;
-    }
-    openConfirmModal(recommendation);
-  });
-
   calendar.addEventListener("click", (event) => {
-    const recommendationButton = event.target.closest("button[data-calendar-recommendation]");
-    if (!recommendationButton) {
+    if (state.justFinishedDrag) {
+      state.justFinishedDrag = false;
       return;
     }
-    const recommendation = getRecommendationById(recommendationButton.dataset.calendarRecommendation);
-    if (!recommendation) {
-      return;
+
+    const suggestionBlock = event.target.closest("[data-ghost-id]");
+    if (suggestionBlock) {
+      selectSuggestion(suggestionBlock.dataset.ghostId);
     }
-    openConfirmModal(recommendation);
   });
+
+  calendar.addEventListener("pointerdown", handleCalendarPointerDown);
+  document.addEventListener("pointermove", handleGlobalPointerMove);
+  document.addEventListener("pointerup", handleGlobalPointerUp);
+}
+
+async function moveWeek(offsetDays) {
+  state.weekStart = addDays(state.weekStart, offsetDays);
+  await safeRefreshSchedulerData();
+}
+
+async function safeRefreshSchedulerData() {
+  try {
+    await refreshSchedulerData();
+  } catch (error) {
+    showFlash(error.message, true);
+  }
 }
 
 async function refreshDashboard() {
@@ -429,7 +302,6 @@ async function refreshDashboard() {
 
 async function refreshUsers() {
   state.users = await apiFetch("/users");
-  pruneStaleState();
   mergeParticipantVisibility();
 
   await Promise.all(
@@ -444,11 +316,9 @@ async function refreshUsers() {
           selected_busy_calendar_ids: [],
           selected_write_calendar_id: null,
         };
-        state.calendars[user.id] = [];
-        return;
       }
 
-      if (state.connections[user.id].connected) {
+      if (state.connections[user.id]?.connected) {
         try {
           state.calendars[user.id] = await apiFetch(`/users/${user.id}/google/calendars`);
         } catch (_error) {
@@ -468,40 +338,752 @@ async function refreshSchedulerData() {
 
   state.events = await apiFetch("/events");
   const sessionPairs = await Promise.all(
-    state.events.map(async (danceEvent) => [danceEvent.id, await apiFetch(`/events/${danceEvent.id}/sessions`)]),
+    state.events.map(async (dance) => [dance.id, await apiFetch(`/events/${dance.id}/sessions`)]),
   );
   state.eventSessions = Object.fromEntries(sessionPairs);
 
   const syncFailures = await syncBusyForVisibleWeek(startIso, endIso);
   state.calendarOverview = await apiFetch(`/calendar/overview?start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}`);
-
-  const planningEventIds = state.events
-    .filter((danceEvent) => danceEvent.remaining_session_count > 0 && !["archived", "completed"].includes(danceEvent.status))
-    .map((danceEvent) => danceEvent.id);
-
-  state.planningRun = planningEventIds.length
-    ? await apiFetch("/planning-runs", {
-        method: "POST",
-        body: JSON.stringify({
-          event_ids: planningEventIds,
-          horizon_start: startIso,
-          horizon_end: endIso,
-          slot_step_minutes: 60,
-        }),
-      })
-    : null;
-
-  if (state.focusedDanceId && !state.events.some((danceEvent) => danceEvent.id === state.focusedDanceId)) {
-    state.focusedDanceId = null;
-  }
-
-  renderSidebar();
-  renderCalendar();
-  renderRecommendations();
+  await requestPlanningRun(startIso, endIso);
+  sanitizeStateAfterRefresh();
+  renderApp();
 
   if (syncFailures.length) {
     showFlash(`Busy sync skipped for ${syncFailures.join(", ")}.`, true);
   }
+}
+
+async function handleSchedulePracticeClick() {
+  try {
+    await scheduleActivePractice();
+  } catch (error) {
+    showFlash(error.message, true);
+  }
+}
+
+async function requestPlanningRun(startIso, endIso) {
+  const eventIds = state.events
+    .filter((dance) => dance.remaining_session_count > 0 && !["archived", "completed"].includes(dance.status))
+    .map((dance) => dance.id);
+
+  if (!eventIds.length) {
+    state.planningRun = null;
+    return;
+  }
+
+  const range = getPlanningHorizon(endIso);
+  const payload = {
+    event_ids: eventIds,
+    horizon_start: range.startIso,
+    horizon_end: range.endIso,
+    slot_step_minutes: 60,
+  };
+
+  const eventDebugSummary = state.events
+    .filter((dance) => eventIds.includes(dance.id))
+    .map((dance) => ({
+      event_id: dance.id,
+      dance_name: dance.name,
+      participant_ids: (dance.participants || []).map((participant) => participant.user_id),
+      required_participant_ids: (dance.participants || [])
+        .filter((participant) => participant.role === "required")
+        .map((participant) => participant.user_id),
+      optional_participant_ids: (dance.participants || [])
+        .filter((participant) => participant.role === "optional")
+        .map((participant) => participant.user_id),
+      duration_minutes: dance.duration_minutes,
+      required_session_count: dance.required_session_count,
+      remaining_session_count: dance.remaining_session_count,
+      latest_schedule_at: dance.latest_schedule_at,
+      status: dance.status,
+    }));
+
+  console.log("POST /api/v1/planning-runs body", payload);
+  console.log("Planning run event context (derived from selected event_ids)", eventDebugSummary);
+
+  state.planningRun = await apiFetch("/planning-runs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+function sanitizeStateAfterRefresh() {
+  const validDanceIds = new Set(state.events.map((dance) => dance.id));
+  Object.keys(state.expandedDanceIds).forEach((danceId) => {
+    if (!validDanceIds.has(danceId)) {
+      delete state.expandedDanceIds[danceId];
+    }
+  });
+
+  if (state.selectedDanceId && !validDanceIds.has(state.selectedDanceId)) {
+    state.selectedDanceId = null;
+    state.activePracticeKey = null;
+    state.selectedSuggestionId = null;
+  }
+
+  if (state.selectedDanceId) {
+    state.expandedDanceIds[state.selectedDanceId] = true;
+    const activePractice = getActivePractice();
+    if (!activePractice || !practiceExists(state.selectedDanceId, activePractice.sessionIndex)) {
+      const next = getNextPracticeForDance(state.selectedDanceId);
+      state.activePracticeKey = next ? practiceKey(state.selectedDanceId, next.sessionIndex) : null;
+      state.selectedSuggestionId = null;
+    }
+  }
+
+  if (state.selectedSuggestionId && !getRecommendationById(state.selectedSuggestionId)) {
+    state.selectedSuggestionId = null;
+  }
+
+  mergeParticipantVisibility();
+}
+
+function renderApp() {
+  renderHeader();
+  renderSidebar();
+  renderRightSidebar();
+  renderCalendar();
+  renderUsers();
+}
+
+function renderHeader() {
+  headerWeekRange.textContent = formatWeekLabel(state.weekStart);
+
+  const selectedDance = getSelectedDance();
+  if (selectedDance) {
+    selectedDancePill.textContent = selectedDance.name;
+    selectedDancePill.classList.remove("hidden");
+  } else {
+    selectedDancePill.classList.add("hidden");
+  }
+
+  const anyConnected = state.users.some((user) => state.connections[user.id]?.connected);
+  connectionBadge.classList.toggle("connected", anyConnected);
+  connectionBadgeText.textContent = anyConnected ? "Google Calendar connected" : "Google Calendar not connected";
+}
+
+function renderSidebar() {
+  renderDances();
+  renderParticipants();
+}
+
+function renderDances() {
+  if (!state.events.length) {
+    dancesList.innerHTML = renderEmptyState(
+      "No dances yet",
+      "Add a dance to start the scheduling workflow.",
+    );
+    return;
+  }
+
+  dancesList.innerHTML = state.events
+    .slice()
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map((dance) => renderDanceCard(dance))
+    .join("");
+}
+
+function renderDanceCard(dance) {
+  const isSelected = dance.id === state.selectedDanceId;
+  const isExpanded = state.expandedDanceIds[dance.id] || isSelected;
+  const practices = getPracticeRows(dance.id);
+  const status = dance.status || deriveDanceStatus(dance);
+
+  return `
+    <article class="dance-card ${isSelected ? "selected" : ""}">
+      <div class="dance-card-top">
+        <button
+          type="button"
+          class="collapse-button"
+          data-dance-toggle="${escapeHtml(dance.id)}"
+          aria-label="${isExpanded ? "Collapse dance" : "Expand dance"}"
+        >
+          ${isExpanded ? "&minus;" : "+"}
+        </button>
+
+        <div>
+          <button type="button" class="dance-title-button" data-dance-select="${escapeHtml(dance.id)}">
+            ${escapeHtml(dance.name)}
+          </button>
+          <div class="dance-progress">${dance.confirmed_session_count}/${dance.required_session_count} scheduled</div>
+        </div>
+      </div>
+
+      <div class="dance-meta-row">
+        <span class="status-badge status-${escapeHtml(status)}">${escapeHtml(formatStatusLabel(status))}</span>
+        <span class="secondary-text compact-copy">${formatDurationHours(dance.duration_minutes)} · due ${formatDate(dance.latest_schedule_at)}</span>
+      </div>
+
+      ${
+        isExpanded
+          ? `
+            <div class="dance-practice-list">
+              ${practices.map((practice) => renderPracticeRow(dance.id, practice)).join("")}
+            </div>
+            <button type="button" class="secondary-button" data-dance-edit="${escapeHtml(dance.id)}">Edit dance</button>
+          `
+          : ""
+      }
+    </article>
+  `;
+}
+
+function renderPracticeRow(danceId, practice) {
+  const isActive = state.activePracticeKey === practiceKey(danceId, practice.sessionIndex);
+  const isScheduled = practice.status === "scheduled";
+
+  return `
+    <button
+      type="button"
+      class="practice-row ${isActive ? "active" : ""}"
+      data-practice-select="${practice.sessionIndex}"
+      data-dance-id="${escapeHtml(danceId)}"
+    >
+      <div class="practice-row-meta">
+        <strong>Practice ${practice.sessionIndex}</strong>
+        <span class="practice-row-status">
+          ${
+            isScheduled
+              ? `${formatShortDate(practice.session.start_at)} · ${formatTime(practice.session.start_at)}-${formatTime(practice.session.end_at)}`
+              : "Unscheduled"
+          }
+        </span>
+      </div>
+      <span class="status-badge ${isScheduled ? "status-scheduled" : "status-unscheduled"}">
+        ${isScheduled ? "scheduled" : "unscheduled"}
+      </span>
+    </button>
+  `;
+}
+
+function renderParticipants() {
+  if (!state.users.length) {
+    participantsList.innerHTML = renderEmptyState("No participants", "Add participant to manage calendars and overlays.");
+    return;
+  }
+
+  participantsList.innerHTML = state.users
+    .slice()
+    .sort((left, right) => left.display_name.localeCompare(right.display_name))
+    .map((user) => {
+      const connected = Boolean(state.connections[user.id]?.connected);
+      const isVisible = state.participantVisibility[user.id] !== false;
+      return `
+        <div class="participant-row">
+          <span class="participant-dot" style="background:${getParticipantColorByUserId(user.id)};"></span>
+          <div class="participant-meta">
+            <strong>${escapeHtml(user.display_name)}</strong>
+            <span class="participant-subline">${connected ? "Calendar connected" : "Calendar not connected"}</span>
+          </div>
+          <button type="button" class="secondary-button" data-manage-user="${escapeHtml(user.id)}">Manage</button>
+          <button
+            type="button"
+            class="visibility-toggle ${isVisible ? "active" : ""}"
+            data-toggle-visibility="${escapeHtml(user.id)}"
+            aria-label="${isVisible ? "Hide participant overlays" : "Show participant overlays"}"
+          ></button>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function renderRightSidebar() {
+  const selectedDance = getSelectedDance();
+  const activePractice = getActivePractice();
+  const remainingPractice = selectedDance ? getNextPracticeForDance(selectedDance.id) : null;
+
+  if (!selectedDance) {
+    selectedDanceSummary.innerHTML = `
+      <strong>Select a dance from the left.</strong>
+      <div class="secondary-text compact-copy">Choose one dance to review its next practice and see ghost suggestions on the calendar.</div>
+    `;
+    schedulePracticeButton.disabled = true;
+    schedulePracticeHint.textContent = "Select a dance from the left.";
+    suggestedSlots.innerHTML = renderEmptyState("Suggested Slots", "Select a dance to start the AI scheduling workflow.");
+    selectedSlotSection.classList.add("hidden");
+    return;
+  }
+
+  const requiredCount = selectedDance.participants.filter((participant) => participant.role === "required").length;
+  const locationLabel = getLocationLabel(selectedDance.id, activePractice?.sessionIndex || remainingPractice?.sessionIndex || 1);
+
+  selectedDanceSummary.innerHTML = `
+    <div>
+      <strong>${escapeHtml(selectedDance.name)}</strong>
+      <div class="secondary-text compact-copy">Practice ${activePractice?.sessionIndex || remainingPractice?.sessionIndex || 1}</div>
+    </div>
+    <div class="summary-grid">
+      <div class="summary-metric">
+        <span class="summary-metric-label">Duration</span>
+        <strong>${formatDurationHours(selectedDance.duration_minutes)}</strong>
+      </div>
+      <div class="summary-metric">
+        <span class="summary-metric-label">Required participants</span>
+        <strong>${requiredCount}</strong>
+      </div>
+      <div class="summary-metric">
+        <span class="summary-metric-label">Location</span>
+        <strong>${escapeHtml(locationLabel)}</strong>
+      </div>
+      <div class="summary-metric">
+        <span class="summary-metric-label">Progress</span>
+        <strong>${selectedDance.confirmed_session_count}/${selectedDance.required_session_count} scheduled</strong>
+      </div>
+    </div>
+  `;
+
+  const allScheduled = selectedDance.remaining_session_count <= 0;
+  schedulePracticeButton.disabled = allScheduled === true;
+  schedulePracticeHint.textContent = allScheduled
+    ? "All practices confirmed. No remaining sessions."
+    : `Active practice: ${activePractice ? `Practice ${activePractice.sessionIndex}` : `Practice ${remainingPractice?.sessionIndex || 1}`}`;
+
+  if (allScheduled) {
+    suggestedSlots.innerHTML = renderEmptyState("Suggested Slots", "All practices confirmed. No remaining sessions.");
+    selectedSlotSection.classList.add("hidden");
+    return;
+  }
+
+  const suggestions = getActiveSuggestions();
+  if (!suggestions.length) {
+    suggestedSlots.innerHTML = renderEmptyState(
+      "Suggested Slots",
+      "No suggested slots found. Try adjusting participant visibility or schedule manually.",
+    );
+    selectedSlotSection.classList.add("hidden");
+    return;
+  }
+
+  suggestedSlots.innerHTML = suggestions.map((suggestion) => renderSuggestionCard(suggestion)).join("");
+  renderSelectedSlotEditor();
+}
+
+function renderSuggestionCard(suggestion) {
+  const display = getSuggestionDisplay(suggestion);
+  const availableNames = getAvailableParticipantNames(suggestion);
+  const conflicts = getConflictText(suggestion);
+  const reasonText = getReasonText(suggestion);
+  const isSelected = state.selectedSuggestionId === suggestion.id;
+
+  return `
+    <article class="slot-card ${isSelected ? "selected" : ""}">
+      <button type="button" data-select-suggestion="${escapeHtml(suggestion.id)}">
+        <div class="slot-card-head">
+          <div>
+            <strong>${escapeHtml(formatSlotTitle(display.start_at, display.end_at))}</strong>
+            <div class="secondary-text compact-copy">Practice ${suggestion.session_index}</div>
+          </div>
+          <span class="score-pill">Score ${displayScore(suggestion)}</span>
+        </div>
+
+        <div class="slot-detail">
+          <span>Available participants</span>
+          <div>${escapeHtml(availableNames.join(", ") || "No availability details returned")}</div>
+        </div>
+
+        <div class="slot-detail">
+          <span>Conflicts</span>
+          <div>${escapeHtml(conflicts)}</div>
+        </div>
+
+        <div class="slot-detail">
+          <span>Reason</span>
+          <div>${escapeHtml(reasonText)}</div>
+        </div>
+      </button>
+    </article>
+  `;
+}
+
+function renderSelectedSlotEditor() {
+  const selectedSuggestion = getSelectedSuggestion();
+  if (!selectedSuggestion) {
+    selectedSlotSection.classList.add("hidden");
+    return;
+  }
+
+  const display = getSuggestionDisplay(selectedSuggestion);
+  selectedSlotSection.classList.remove("hidden");
+  selectedSlotEditor.innerHTML = `
+    <div class="editor-grid">
+      <label>
+        Start time
+        <input data-slot-field="start_at" type="datetime-local" value="${toLocalDateTimeInputValue(display.start_at)}" />
+      </label>
+      <label>
+        End time
+        <input data-slot-field="end_at" type="datetime-local" value="${toLocalDateTimeInputValue(display.end_at)}" />
+      </label>
+      <label>
+        Location/room
+        <input data-slot-field="location" type="text" value="${escapeAttribute(display.location === DEFAULT_ROOM_LABEL ? "" : display.location || "")}" placeholder="Studio A" />
+      </label>
+    </div>
+  `;
+
+  const timeModified = isSuggestionTimeModified(selectedSuggestion.id);
+  const locationModified = Boolean(getSlotDraft(selectedSuggestion.id)?.location?.trim());
+  const notes = [];
+  if (timeModified) {
+    notes.push("Time edits update the preview only. The current backend confirm endpoint can only confirm the original suggested slot.");
+  }
+  if (locationModified) {
+    notes.push("Location is stored as a frontend placeholder because the current backend response does not include a room name field.");
+  }
+  if (notes.length) {
+    selectedSlotNote.textContent = notes.join(" ");
+    selectedSlotNote.classList.remove("hidden");
+  } else {
+    selectedSlotNote.classList.add("hidden");
+    selectedSlotNote.textContent = "";
+  }
+}
+
+function renderCalendar() {
+  const selectedDance = getSelectedDance();
+  const activePractice = getActivePractice();
+  calendarSubtitle.textContent = selectedDance
+    ? `${selectedDance.name} · ${activePractice ? `Practice ${activePractice.sessionIndex}` : "Select a practice"}`
+    : "Busy overlays, suggested slots, and confirmed practices.";
+
+  const weekDays = Array.from({ length: 7 }, (_, index) => addDays(state.weekStart, index));
+  const busySegments = expandBusySegments(getVisibleBusyIntervals(), weekDays);
+  const ghostSuggestions = getActiveSuggestions().map((suggestion) => getSuggestionDisplay(suggestion));
+  const ghostSegments = expandSuggestionSegments(ghostSuggestions, weekDays);
+  const confirmedSegments = expandConfirmedSegments(getRenderedPracticeSessions(), weekDays);
+  const hasItems = busySegments.length || ghostSegments.length || confirmedSegments.length;
+
+  if (!hasItems) {
+    calendar.innerHTML = `
+      <div class="calendar-empty">
+        ${renderEmptyState("Nothing on the calendar", "Select a dance or sync calendars to populate this week view.")}
+      </div>
+    `;
+    return;
+  }
+
+  const busyByDay = groupByDay(busySegments);
+  const ghostByDay = groupByDay(ghostSegments);
+  const confirmedByDay = groupByDay(confirmedSegments);
+
+  const headerHtml = `
+    <div class="calendar-header">
+      <div class="calendar-header-cell">Time</div>
+      ${weekDays
+        .map(
+          (day) => `
+            <div class="calendar-header-cell">
+              <div class="calendar-day-label">
+                <strong>${escapeHtml(day.toLocaleDateString(undefined, { weekday: "short" }))}</strong>
+                <span class="secondary-text">${escapeHtml(day.toLocaleDateString(undefined, { month: "short", day: "numeric" }))}</span>
+              </div>
+            </div>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+
+  const gridHtml = `
+    <div class="calendar-grid">
+      <div class="time-column">
+        ${Array.from({ length: GRID_END_HOUR - GRID_START_HOUR }, (_, index) => `<div class="time-cell">${formatHourLabel(GRID_START_HOUR + index)}</div>`).join("")}
+      </div>
+
+      ${weekDays
+        .map((day, index) => {
+          const dayKey = toDayKey(day);
+          const busyItems = layoutOverlappingItems(busyByDay[dayKey] || []);
+          const ghostItems = layoutOverlappingItems(ghostByDay[dayKey] || []);
+          const confirmedItems = layoutOverlappingItems(confirmedByDay[dayKey] || []);
+          return `
+            <div class="day-column" data-day-index="${index}">
+              ${Array.from({ length: GRID_END_HOUR - GRID_START_HOUR }, (_, hourIndex) => `<div class="hour-line" style="top:${hourIndex * HOUR_ROW_HEIGHT}px;"></div>`).join("")}
+              ${busyItems.map(({ item, column, columnCount }) => renderBusyBlock(item, column, columnCount)).join("")}
+              ${ghostItems.map(({ item, column, columnCount }) => renderGhostBlock(item, column, columnCount)).join("")}
+              ${confirmedItems.map(({ item, column, columnCount }) => renderConfirmedBlock(item, column, columnCount)).join("")}
+            </div>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+
+  calendar.innerHTML = `${headerHtml}${gridHtml}`;
+}
+
+function renderBusyBlock(segment, column, columnCount) {
+  const placement = getPlacement(segment.start_at, segment.end_at);
+  if (!placement) {
+    return "";
+  }
+
+  return `
+    <div
+      class="calendar-block busy"
+      style="${blockPlacementStyle(placement, column, columnCount)} background:${getParticipantColorByUserId(segment.user_id)}aa;"
+    >
+      <div class="block-title">${escapeHtml(segment.user_name)}</div>
+      <div class="block-subtitle">Busy · ${formatTime(segment.start_at)}-${formatTime(segment.end_at)}</div>
+    </div>
+  `;
+}
+
+function renderGhostBlock(segment, column, columnCount) {
+  const placement = getPlacement(segment.start_at, segment.end_at);
+  if (!placement) {
+    return "";
+  }
+
+  const selected = state.selectedSuggestionId === segment.id ? "selected" : "";
+  const dragging = state.dragState?.type === "suggestion" && state.dragState.id === segment.id ? "dragging" : "";
+  return `
+    <div
+      class="calendar-block ghost ${selected} ${dragging}"
+      data-ghost-id="${escapeHtml(segment.id)}"
+      style="${blockPlacementStyle(placement, column, columnCount)}"
+    >
+      <div class="block-title">${escapeHtml(segment.dance_name)} · Practice ${segment.session_index}</div>
+      <div class="block-subtitle">${formatTime(segment.start_at)}-${formatTime(segment.end_at)}</div>
+      <div class="block-subtitle">Suggested slot</div>
+    </div>
+  `;
+}
+
+function renderConfirmedBlock(segment, column, columnCount) {
+  const placement = getPlacement(segment.start_at, segment.end_at);
+  if (!placement) {
+    return "";
+  }
+
+  const editable = state.confirmedEditMode ? "editable" : "";
+  const dragging = state.dragState?.type === "confirmed" && state.dragState.id === segment.id ? "dragging" : "";
+  const location = segment.location && segment.location !== DEFAULT_ROOM_LABEL ? ` · ${segment.location}` : "";
+
+  return `
+    <div
+      class="calendar-block confirmed ${editable} ${dragging}"
+      data-confirmed-id="${escapeHtml(segment.id)}"
+      style="${blockPlacementStyle(placement, column, columnCount)}"
+    >
+      <div class="block-title">${escapeHtml(segment.dance_name)} · Practice ${segment.session_index}</div>
+      <div class="block-subtitle">${formatTime(segment.start_at)}-${formatTime(segment.end_at)}${escapeHtml(location)}</div>
+      <div class="block-subtitle">${state.confirmedEditMode ? "Confirmed · drag to preview" : "Confirmed practice"}</div>
+    </div>
+  `;
+}
+
+function renderUsers() {
+  if (!state.users.length) {
+    usersList.innerHTML = renderEmptyState("No participants", "Add participant to connect calendars and schedule dances.");
+    return;
+  }
+
+  usersList.innerHTML = state.users
+    .slice()
+    .sort((left, right) => left.display_name.localeCompare(right.display_name))
+    .map((user) => renderSettingsUserCard(user))
+    .join("");
+
+  if (state.focusedSettingsUserId) {
+    requestAnimationFrame(() => {
+      const card = usersList.querySelector(`[data-settings-user="${state.focusedSettingsUserId}"]`);
+      card?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  }
+}
+
+function renderSettingsUserCard(user) {
+  const connection = state.connections[user.id] || {
+    connected: false,
+    status: "disconnected",
+    account_email: null,
+    selected_busy_calendar_ids: [],
+    selected_write_calendar_id: null,
+  };
+  const calendars = state.calendars[user.id] || [];
+  const busySelections = new Set(connection.selected_busy_calendar_ids || []);
+  const writeSelection = connection.selected_write_calendar_id || "";
+  const writableCalendars = calendars.filter((calendarItem) => ["owner", "writer"].includes(calendarItem.access_role));
+  const focusedClass = state.focusedSettingsUserId === user.id ? 'style="outline: 2px solid rgba(79, 70, 229, 0.18);"' : "";
+
+  return `
+    <section class="settings-user-card" data-settings-user="${escapeHtml(user.id)}" ${focusedClass}>
+      <div class="settings-user-top">
+        <div class="participant-meta">
+          <strong>${escapeHtml(user.display_name)}</strong>
+          <span class="connection-summary">${escapeHtml(user.timezone)}${user.email ? ` · ${escapeHtml(user.email)}` : ""}</span>
+        </div>
+        <span class="status-badge ${connection.connected ? "status-completed" : "status-unscheduled"}">${escapeHtml(connection.status || "disconnected")}</span>
+      </div>
+
+      <div class="settings-user-actions">
+        <button type="button" class="secondary-button" data-user-action="connect" data-user-id="${escapeHtml(user.id)}">Connect Google</button>
+        <button type="button" class="secondary-button" data-user-action="refresh-calendars" data-user-id="${escapeHtml(user.id)}">Refresh calendars</button>
+        <button type="button" class="secondary-button" data-user-action="sync-busy" data-user-id="${escapeHtml(user.id)}">Sync visible week</button>
+      </div>
+
+      ${
+        calendars.length
+          ? `
+            <div class="select-grid">
+              <label>
+                Busy source calendars
+                <select multiple size="4" data-role="busy-calendars" data-user-id="${escapeHtml(user.id)}">
+                  ${calendars
+                    .map(
+                      (calendarItem) => `
+                        <option value="${escapeAttribute(calendarItem.id)}" ${busySelections.has(calendarItem.id) ? "selected" : ""}>
+                          ${escapeHtml(calendarItem.summary)}${calendarItem.primary ? " (primary)" : ""}
+                        </option>
+                      `,
+                    )
+                    .join("")}
+                </select>
+              </label>
+              <label>
+                Write calendar
+                <select data-role="write-calendar" data-user-id="${escapeHtml(user.id)}">
+                  <option value="">Use primary</option>
+                  ${writableCalendars
+                    .map(
+                      (calendarItem) => `
+                        <option value="${escapeAttribute(calendarItem.id)}" ${writeSelection === calendarItem.id ? "selected" : ""}>
+                          ${escapeHtml(calendarItem.summary)}
+                        </option>
+                      `,
+                    )
+                    .join("")}
+                </select>
+              </label>
+              <button type="button" class="primary-button" data-user-action="save-calendars" data-user-id="${escapeHtml(user.id)}">Save calendar selection</button>
+            </div>
+          `
+          : `<div class="connection-summary">Load calendars after connecting Google Calendar to choose busy-source and write calendars.</div>`
+      }
+    </section>
+  `;
+}
+
+function selectDance(danceId, { sessionIndex = null, keepSuggestion = false } = {}) {
+  const dance = getDanceById(danceId);
+  if (!dance) {
+    return;
+  }
+
+  state.selectedDanceId = danceId;
+  state.expandedDanceIds[danceId] = true;
+
+  const nextPractice = sessionIndex ? { sessionIndex } : getNextPracticeForDance(danceId) || { sessionIndex: 1 };
+  state.activePracticeKey = practiceKey(danceId, nextPractice.sessionIndex);
+  if (!keepSuggestion) {
+    state.selectedSuggestionId = null;
+  }
+
+  renderApp();
+}
+
+function selectSuggestion(suggestionId) {
+  const suggestion = getRecommendationById(suggestionId);
+  if (!suggestion) {
+    return;
+  }
+
+  state.selectedSuggestionId = suggestionId;
+  state.selectedDanceId = suggestion.dance_event_id;
+  state.expandedDanceIds[suggestion.dance_event_id] = true;
+  state.activePracticeKey = practiceKey(suggestion.dance_event_id, suggestion.session_index);
+  ensureSlotDraft(suggestion);
+  renderApp();
+  focusSuggestionInCalendar(suggestionId);
+}
+
+async function scheduleActivePractice() {
+  const selectedDance = getSelectedDance();
+  if (!selectedDance) {
+    throw new Error("Select a dance first.");
+  }
+  if (selectedDance.remaining_session_count <= 0) {
+    renderRightSidebar();
+    return;
+  }
+
+  const nextPractice = getNextPracticeForDance(selectedDance.id);
+  if (!nextPractice) {
+    renderRightSidebar();
+    return;
+  }
+
+  state.activePracticeKey = practiceKey(selectedDance.id, nextPractice.sessionIndex);
+  state.selectedSuggestionId = null;
+
+  const { startIso, endIso } = getWeekRange();
+  await requestPlanningRun(startIso, endIso);
+  renderApp();
+}
+
+async function confirmSelectedSlot() {
+  const selectedSuggestion = getSelectedSuggestion();
+  if (!selectedSuggestion || !state.planningRun) {
+    throw new Error("Select a suggestion first.");
+  }
+
+  if (isSuggestionTimeModified(selectedSuggestion.id)) {
+    throw new Error("Reset the slot to the original suggested time before confirming. Manual time edits are preview-only right now.");
+  }
+
+  await apiFetch(`/planning-runs/${state.planningRun.id}/confirm`, {
+    method: "POST",
+    body: JSON.stringify({
+      result_ids: [selectedSuggestion.id],
+    }),
+  });
+
+  const draft = getSlotDraft(selectedSuggestion.id);
+  if (draft?.location?.trim()) {
+    state.sessionLocationOverrides[practiceKey(selectedSuggestion.dance_event_id, selectedSuggestion.session_index)] = draft.location.trim();
+  }
+
+  state.selectedSuggestionId = null;
+  await refreshSchedulerData();
+
+  if (state.selectedDanceId) {
+    const nextPractice = getNextPracticeForDance(state.selectedDanceId);
+    state.activePracticeKey = nextPractice ? practiceKey(state.selectedDanceId, nextPractice.sessionIndex) : null;
+  }
+
+  renderApp();
+  showFlash("Slot confirmed.");
+}
+
+function handleSlotEditorChange(event) {
+  const field = event.target.dataset.slotField;
+  const selectedSuggestion = getSelectedSuggestion();
+  if (!field || !selectedSuggestion) {
+    return;
+  }
+
+  const draft = ensureSlotDraft(selectedSuggestion);
+  if (field === "location") {
+    draft.location = event.target.value;
+  } else if (field === "start_at") {
+    const value = fromLocalDateTimeInputValue(event.target.value);
+    if (value) {
+      draft.start_at = value;
+      if (new Date(draft.end_at) <= new Date(draft.start_at)) {
+        draft.end_at = addMinutesIso(draft.start_at, getDurationMinutes(selectedSuggestion.start_at, selectedSuggestion.end_at));
+      }
+    }
+  } else if (field === "end_at") {
+    const value = fromLocalDateTimeInputValue(event.target.value);
+    if (value) {
+      draft.end_at = value;
+    }
+  }
+
+  renderRightSidebar();
+  renderCalendar();
 }
 
 async function createUser() {
@@ -519,7 +1101,160 @@ async function createUser() {
   userForm.reset();
   timezoneInput.value = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   await refreshDashboard();
+  openSettingsModal({ focusForm: true });
   showFlash("Participant created.");
+}
+
+function openSettingsModal({ focusUserId = null, focusForm = false } = {}) {
+  state.focusedSettingsUserId = focusUserId;
+  state.focusedSettingsForm = focusForm;
+  settingsModal.classList.remove("hidden");
+  danceModal.classList.add("hidden");
+  modalOverlay.classList.remove("hidden");
+  renderUsers();
+
+  if (focusForm) {
+    requestAnimationFrame(() => document.getElementById("display-name").focus());
+  }
+}
+
+function openCreateDanceModal() {
+  if (!state.users.length) {
+    showFlash("Add participant before creating a dance.", true);
+    openSettingsModal({ focusForm: true });
+    return;
+  }
+
+  state.editingDanceId = null;
+  addDanceForm.reset();
+  setDefaultDanceDeadline();
+  renderDanceParticipantSelectors();
+  hideInlineError(addDanceError);
+  danceModalEyebrow.textContent = "Dance Setup";
+  danceModalTitle.textContent = "Add dance";
+  danceModalSubtitle.textContent = "Create a dance and choose who needs to attend.";
+  submitDanceButton.textContent = "Save dance";
+  settingsModal.classList.add("hidden");
+  danceModal.classList.remove("hidden");
+  modalOverlay.classList.remove("hidden");
+}
+
+function openEditDanceModal(danceId) {
+  const dance = getDanceById(danceId);
+  if (!dance) {
+    showFlash("Dance not found.", true);
+    return;
+  }
+
+  state.editingDanceId = dance.id;
+  danceModalEyebrow.textContent = "Dance Setup";
+  danceModalTitle.textContent = "Edit dance";
+  danceModalSubtitle.textContent = "Update dance details and participant roles.";
+  submitDanceButton.textContent = "Save dance";
+  hideInlineError(addDanceError);
+  renderDanceParticipantSelectors(
+    Object.fromEntries(dance.participants.map((participant) => [participant.user_id, participant.role])),
+  );
+
+  document.getElementById("dance-name").value = dance.name;
+  document.getElementById("dance-session-count").value = dance.required_session_count;
+  document.getElementById("dance-duration-hours").value = `${dance.duration_minutes / 60}`;
+  document.getElementById("dance-deadline").value = toDateInputValue(dance.latest_schedule_at);
+  document.getElementById("dance-description").value = dance.description || "";
+
+  settingsModal.classList.add("hidden");
+  danceModal.classList.remove("hidden");
+  modalOverlay.classList.remove("hidden");
+}
+
+function closeModals() {
+  settingsModal.classList.add("hidden");
+  danceModal.classList.add("hidden");
+  modalOverlay.classList.add("hidden");
+  state.focusedSettingsUserId = null;
+  state.focusedSettingsForm = false;
+  state.editingDanceId = null;
+  hideInlineError(addDanceError);
+}
+
+function renderDanceParticipantSelectors(selectedRoles = {}) {
+  addDanceParticipants.innerHTML = state.users
+    .slice()
+    .sort((left, right) => left.display_name.localeCompare(right.display_name))
+    .map(
+      (user) => `
+        <div class="participant-selector-row">
+          <span class="participant-dot" style="background:${getParticipantColorByUserId(user.id)};"></span>
+          <div class="participant-meta">
+            <strong>${escapeHtml(user.display_name)}</strong>
+            <span class="participant-subline">${escapeHtml(user.timezone)}</span>
+          </div>
+          <select data-dance-participant="${escapeHtml(user.id)}">
+            <option value="ignore" ${(selectedRoles[user.id] || "ignore") === "ignore" ? "selected" : ""}>Ignore</option>
+            <option value="required" ${selectedRoles[user.id] === "required" ? "selected" : ""}>Required</option>
+            <option value="optional" ${selectedRoles[user.id] === "optional" ? "selected" : ""}>Optional</option>
+          </select>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+async function submitDanceForm() {
+  hideInlineError(addDanceError);
+  const isEditing = Boolean(state.editingDanceId);
+  const name = document.getElementById("dance-name").value.trim();
+  const requiredSessionCount = Number(document.getElementById("dance-session-count").value);
+  const durationHours = Number(document.getElementById("dance-duration-hours").value);
+  const deadline = document.getElementById("dance-deadline").value;
+  const description = document.getElementById("dance-description").value.trim();
+
+  const participants = state.users
+    .map((user) => ({
+      user_id: user.id,
+      role: addDanceParticipants.querySelector(`[data-dance-participant="${user.id}"]`)?.value || "ignore",
+    }))
+    .filter((participant) => participant.role !== "ignore");
+
+  if (!name) {
+    throw new Error("Dance name is required.");
+  }
+  if (!deadline) {
+    throw new Error("Deadline is required.");
+  }
+  if (!participants.length) {
+    throw new Error("Select at least one participant.");
+  }
+  if (!participants.some((participant) => participant.role === "required")) {
+    throw new Error("At least one participant must be marked required.");
+  }
+
+  const existingDance = state.editingDanceId ? getDanceById(state.editingDanceId) : null;
+  const payload = {
+    name,
+    description: description || null,
+    organizer_user_id: existingDance?.organizer_user_id || state.users[0]?.id,
+    duration_minutes: Math.round(durationHours * 60),
+    latest_schedule_at: new Date(`${deadline}T23:59:59`).toISOString(),
+    required_session_count: requiredSessionCount,
+    participants,
+  };
+
+  const response = isEditing
+    ? await apiFetch(`/events/${state.editingDanceId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      })
+    : await apiFetch("/events", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+
+  closeModals();
+  state.selectedDanceId = response.id;
+  await refreshSchedulerData();
+  selectDance(response.id);
+  showFlash(isEditing ? "Dance updated." : "Dance created.");
 }
 
 async function beginGoogleOauth(userId) {
@@ -548,11 +1283,12 @@ async function saveCalendarSelection(userId) {
       write_calendar_id: writeCalendarId,
     }),
   });
+
   await refreshSchedulerData();
   renderUsers();
 }
 
-async function syncBusyForUser(userId) {
+function syncBusyForUser(userId) {
   const { startIso, endIso } = getWeekRange();
   return apiFetch(`/users/${userId}/google/sync-busy`, {
     method: "POST",
@@ -588,977 +1324,398 @@ async function syncBusyForVisibleWeek(startIso, endIso) {
   return failures;
 }
 
-function renderUsers() {
-  if (!state.users.length) {
-    usersList.innerHTML = renderEmptyState({
-      title: "No participants yet",
-      description: "Create people here first so you can assign them to dances and connect their calendars.",
+function handleCalendarPointerDown(event) {
+  const ghost = event.target.closest("[data-ghost-id]");
+  if (ghost) {
+    const suggestion = getRecommendationById(ghost.dataset.ghostId);
+    if (!suggestion) {
+      return;
+    }
+    ensureSlotDraft(suggestion);
+    state.selectedSuggestionId = suggestion.id;
+    beginDrag({
+      type: "suggestion",
+      id: suggestion.id,
+      durationMinutes: getDurationMinutes(getSuggestionDisplay(suggestion).start_at, getSuggestionDisplay(suggestion).end_at),
+      pointerOffsetMinutes: getPointerOffsetMinutes(event, ghost),
     });
+    renderRightSidebar();
+    renderCalendar();
+    event.preventDefault();
     return;
   }
 
-  usersList.innerHTML = state.users
-    .map((user, index) => {
-      const connection = state.connections[user.id] || {};
-      const calendars = state.calendars[user.id] || [];
-      const busySelections = new Set(connection.selected_busy_calendar_ids || []);
-      const writeSelection = connection.selected_write_calendar_id || "";
-      const writableCalendars = calendars.filter((calendarItem) => ["owner", "writer"].includes(calendarItem.access_role));
-      const selectedCount = busySelections.size;
-
-      return `
-        <div class="user-card">
-          <div class="row">
-            ${renderParticipantChip(user.id, index)}
-            <div class="participant-meta" style="flex: 1;">
-              <strong>${escapeHtml(user.display_name)}</strong>
-              <span class="subtle tiny">${escapeHtml(user.timezone)}${user.email ? ` · ${escapeHtml(user.email)}` : ""}</span>
-            </div>
-            <span class="status-badge ${connection.connected ? "status-scheduled" : "status-unscheduled"}">${escapeHtml(connection.status || "disconnected")}</span>
-          </div>
-          <div class="row">
-            <button type="button" class="secondary small" data-user-action="connect" data-user-id="${user.id}">Connect Google</button>
-            <button type="button" class="secondary small" data-user-action="refresh-calendars" data-user-id="${user.id}">Refresh calendars</button>
-            <button type="button" class="secondary small" data-user-action="sync-busy" data-user-id="${user.id}">Sync visible week</button>
-          </div>
-          ${
-            calendars.length
-              ? `
-                <div class="metric-card">
-                  <span class="metric-label">Selected busy calendars</span>
-                  <span class="metric-value">${selectedCount || 0} chosen</span>
-                </div>
-                <label>
-                  Busy source calendars
-                  <select multiple size="4" data-role="busy-calendars" data-user-id="${user.id}">
-                    ${calendars
-                      .map(
-                        (calendarItem) => `
-                          <option value="${escapeHtml(calendarItem.id)}" ${busySelections.has(calendarItem.id) ? "selected" : ""}>
-                            ${escapeHtml(calendarItem.summary)}${calendarItem.primary ? " (primary)" : ""}
-                          </option>
-                        `,
-                      )
-                      .join("")}
-                  </select>
-                </label>
-                <label>
-                  Write calendar
-                  <select data-role="write-calendar" data-user-id="${user.id}">
-                    <option value="">Use primary</option>
-                    ${writableCalendars
-                      .map(
-                        (calendarItem) => `
-                          <option value="${escapeHtml(calendarItem.id)}" ${writeSelection === calendarItem.id ? "selected" : ""}>
-                            ${escapeHtml(calendarItem.summary)}
-                          </option>
-                        `,
-                      )
-                      .join("")}
-                  </select>
-                </label>
-                <button type="button" class="secondary" data-user-action="save-calendars" data-user-id="${user.id}">Save calendar selection</button>
-              `
-              : `<div class="subtle tiny">Connect Google, then load calendars to choose busy-source and write calendars.</div>`
-          }
-        </div>
-      `;
-    })
-    .join("");
-}
-
-function renderSidebar() {
-  clearDanceFilterButton.classList.toggle("hidden", !state.focusedDanceId);
-
-  if (!state.events.length) {
-    eventsList.innerHTML = renderEmptyState({
-      title: "No dances scheduled yet",
-      description: "Create your first dance to start global practice planning.",
-      actionLabel: "Add dance",
-      action: "add-dance",
+  const confirmed = event.target.closest("[data-confirmed-id]");
+  if (confirmed && state.confirmedEditMode) {
+    const session = getRenderedPracticeSessions().find((item) => item.id === confirmed.dataset.confirmedId);
+    if (!session) {
+      return;
+    }
+    beginDrag({
+      type: "confirmed",
+      id: session.id,
+      durationMinutes: getDurationMinutes(session.start_at, session.end_at),
+      pointerOffsetMinutes: getPointerOffsetMinutes(event, confirmed),
     });
-  } else {
-    eventsList.innerHTML = state.events
-      .slice()
-      .sort((left, right) => left.latest_schedule_at.localeCompare(right.latest_schedule_at))
-      .map((danceEvent) => renderDanceCard(danceEvent))
-      .join("");
+    event.preventDefault();
   }
-
-  const visibleParticipants = getVisibleParticipants();
-  participantsList.innerHTML = visibleParticipants.length
-    ? visibleParticipants
-        .map(
-          (user, index) => `
-            <div class="participant-row">
-              ${renderParticipantChip(user.id, index)}
-              <div class="participant-meta">
-                <strong>${escapeHtml(user.display_name)}</strong>
-                <span class="subtle tiny">${escapeHtml(user.timezone)}</span>
-              </div>
-              <button type="button" class="secondary small" data-participant-manage="${user.id}">Manage</button>
-              <input class="toggle" type="checkbox" data-participant-toggle="true" value="${user.id}" ${
-                state.participantVisibility[user.id] !== false ? "checked" : ""
-              } />
-            </div>
-          `,
-        )
-        .join("")
-    : renderEmptyState({
-        title: "No participants in view",
-        description: "Create people in Calendar Settings, then assign them to dances here.",
-        actionLabel: "Open settings",
-        action: "settings",
-      });
 }
 
-function renderDanceCard(danceEvent) {
-  const eventSessions = getSessionsForEvent(danceEvent.id);
-  const isExpanded = Boolean(state.expandedDanceIds[danceEvent.id]);
-  const isFocused = state.focusedDanceId === danceEvent.id;
-  const participantUsers = danceEvent.participants
-    .map((participant) => ({ user: getUserById(participant.user_id), role: participant.role }))
-    .filter((entry) => Boolean(entry.user));
-  const requiredCount = danceEvent.participants.filter((participant) => participant.role === "required").length;
-  const optionalCount = Math.max(danceEvent.participants.length - requiredCount, 0);
-  const effectiveStatus = danceEvent.status || deriveAutomaticEventStatus(danceEvent);
-
-  return `
-    <div class="dance-card ${isFocused ? "focused" : ""}">
-      <div class="dance-header">
-        <button type="button" class="secondary small icon-button" data-event-expand="true" data-event-id="${danceEvent.id}">
-          ${isExpanded ? "&minus;" : "+"}
-        </button>
-        <div class="participant-meta">
-          <button type="button" class="dance-title-button" data-event-focus="true" data-event-id="${danceEvent.id}">
-            ${escapeHtml(danceEvent.name)}
-          </button>
-          <span class="subtle tiny">${danceEvent.confirmed_session_count}/${danceEvent.required_session_count} sessions scheduled</span>
-        </div>
-        <span class="status-badge status-${escapeHtml(effectiveStatus)}">${escapeHtml(formatStatusLabel(effectiveStatus))}</span>
-      </div>
-      <div class="dance-metrics">
-        <div class="metric-card">
-          <span class="metric-label">Deadline</span>
-          <span class="metric-value">${formatDate(danceEvent.latest_schedule_at)}</span>
-        </div>
-        <div class="metric-card">
-          <span class="metric-label">Practice length</span>
-          <span class="metric-value">${formatDurationHours(danceEvent.duration_minutes)}</span>
-        </div>
-        <div class="metric-card">
-          <span class="metric-label">Dancers</span>
-          <span class="metric-value">${danceEvent.participants.length} total</span>
-        </div>
-        <div class="metric-card">
-          <span class="metric-label">Roles</span>
-          <span class="metric-value">${requiredCount} required · ${optionalCount} optional</span>
-        </div>
-      </div>
-      ${
-        isExpanded
-          ? `
-            <div class="dance-expanded">
-              ${
-                danceEvent.description
-                  ? `<div class="subtle">${escapeHtml(danceEvent.description)}</div>`
-                  : ""
-              }
-              <div class="stack compact-stack">
-                <div class="subtle tiny">Participants</div>
-                <div class="participant-pill-list">
-                  ${participantUsers
-                    .map(
-                      ({ user, role }, index) => `
-                        <div class="participant-pill">
-                          ${renderParticipantChip(user.id, index)}
-                          <div class="participant-meta" style="flex: 1;">
-                            <strong>${escapeHtml(user.display_name)}</strong>
-                            <span class="subtle tiny">${escapeHtml(role)}</span>
-                          </div>
-                        </div>
-                      `,
-                    )
-                    .join("")}
-                </div>
-              </div>
-              ${
-                eventSessions.length
-                  ? `
-                    <div class="stack compact-stack">
-                      <div class="subtle tiny">Confirmed practices</div>
-                      <div class="session-pill-list">
-                        ${eventSessions
-                          .map(
-                            (session) => `
-                              <div class="session-pill">
-                                <span class="tag locked">Confirmed</span>
-                                <div class="participant-meta">
-                                  <strong>${formatShortDateTime(session.start_at)}</strong>
-                                  <span class="subtle tiny">${formatTime(session.start_at)} - ${formatTime(session.end_at)}</span>
-                                </div>
-                              </div>
-                            `,
-                          )
-                          .join("")}
-                      </div>
-                    </div>
-                  `
-                  : ""
-              }
-              <div class="dance-actions">
-                <button type="button" class="secondary small" data-event-action="edit" data-event-id="${danceEvent.id}">Edit</button>
-                <button type="button" class="secondary small" data-event-action="duplicate" data-event-id="${danceEvent.id}">Duplicate</button>
-                <button type="button" class="secondary small" data-event-action="toggle-status" data-event-id="${danceEvent.id}">
-                  ${escapeHtml(getToggleDanceStatusLabel(danceEvent))}
-                </button>
-                <button type="button" class="secondary small" data-event-action="archive" data-event-id="${danceEvent.id}">
-                  ${danceEvent.status === "archived" ? "Restore" : "Archive"}
-                </button>
-                <button type="button" class="danger-ghost small" data-event-action="delete" data-event-id="${danceEvent.id}">Delete</button>
-              </div>
-            </div>
-          `
-          : ""
-      }
-    </div>
-  `;
-}
-
-function renderCalendar() {
-  weekLabel.textContent = formatWeekLabel(state.weekStart);
-  const weekDays = Array.from({ length: 7 }, (_, index) => addDays(state.weekStart, index));
-  const visibleBusyIntervals = state.calendarOverview.busy_intervals.filter(
-    (interval) => state.participantVisibility[interval.user_id] !== false,
-  );
-  const focusedRecommendations = state.focusedDanceId
-    ? getVisiblePlanningGroups().flatMap((group) => group.recommendations || [])
-    : [];
-  const hasCalendarItems =
-    visibleBusyIntervals.length > 0 || state.calendarOverview.practice_sessions.length > 0 || focusedRecommendations.length > 0;
-
-  if (!hasCalendarItems) {
-    calendar.innerHTML = `
-      <div class="calendar-empty">
-        ${renderEmptyState({
-          title: "Nothing is on this week yet",
-          description: state.focusedDanceId
-            ? "This week has no busy intervals, confirmed practices, or recommendation slots for the selected dance."
-            : "Busy intervals and confirmed practices will appear here. Focus a dance to preview recommendation slots on the calendar.",
-        })}
-      </div>
-    `;
-    return;
-  }
-
-  const headerRow = `
-    <div class="calendar-grid calendar-header-row">
-      <div class="calendar-header-cell"></div>
-      ${weekDays
-        .map(
-          (day) => `
-            <div class="calendar-header-cell">
-              <div class="calendar-header-day">
-                <strong>${day.toLocaleDateString(undefined, { weekday: "short" })}</strong>
-                <div class="subtle tiny">${day.toLocaleDateString(undefined, { month: "short", day: "numeric" })}</div>
-              </div>
-            </div>
-          `,
-        )
-        .join("")}
-    </div>
-  `;
-
-  const gridBody = `
-    <div class="calendar-grid">
-      <div class="time-col">
-        ${Array.from({ length: GRID_END_HOUR - GRID_START_HOUR }, (_, index) => {
-          const hour = GRID_START_HOUR + index;
-          return `<div class="time-cell">${formatHourLabel(hour)}</div>`;
-        }).join("")}
-      </div>
-      ${weekDays
-        .map((day) => {
-          const dayKey = toDayKey(day);
-          const dayBusy = layoutOverlappingItems(
-            visibleBusyIntervals.filter((interval) => toDayKey(interval.start_at) === dayKey),
-          );
-          const dayRecommendations = layoutOverlappingItems(
-            focusedRecommendations.filter((recommendation) => toDayKey(recommendation.start_at) === dayKey),
-          );
-          const daySessions = state.calendarOverview.practice_sessions.filter(
-            (session) => toDayKey(session.start_at) === dayKey,
-          );
-
-          return `
-            <div class="day-col">
-              ${Array.from({ length: GRID_END_HOUR - GRID_START_HOUR }, () => `<div class="day-hour-line"></div>`).join("")}
-              ${dayBusy.map(({ item, column, columnCount }) => renderBusyBlock(item, column, columnCount)).join("")}
-              ${dayRecommendations
-                .map(({ item, column, columnCount }) => renderRecommendationBlock(item, column, columnCount))
-                .join("")}
-              ${daySessions.map((session) => renderConfirmedBlock(session)).join("")}
-            </div>
-          `;
-        })
-        .join("")}
-    </div>
-  `;
-
-  calendar.innerHTML = `${headerRow}${gridBody}`;
-}
-
-function renderRecommendations() {
-  if (!state.events.length) {
-    recommendationsSubtitle.textContent = "Add a dance to begin planning.";
-    recommendations.innerHTML = renderEmptyState({
-      title: "No dance data yet",
-      description: "Create a dance from the sidebar to generate AI-ranked practice options.",
-      actionLabel: "Add dance",
-      action: "add-dance",
-    });
-    return;
-  }
-
-  if (!state.focusedDanceId) {
-    const remainingEvents = state.events.filter(
-      (danceEvent) => danceEvent.remaining_session_count > 0 && !["archived", "completed"].includes(danceEvent.status),
-    );
-    recommendationsSubtitle.textContent = "Choose a dance to inspect the ranked options for that practice plan.";
-    recommendations.innerHTML = `
-      <div class="summary-card">
-        <strong>Select a dance from the left sidebar</strong>
-        <div class="subtle">The calendar keeps the full team view, but this panel stays focused on one dance at a time.</div>
-      </div>
-      ${
-        remainingEvents.length
-          ? remainingEvents
-              .map(
-                (danceEvent) => `
-                  <div class="summary-card">
-                    <div class="row" style="justify-content: space-between;">
-                      <div class="participant-meta" style="flex: 1;">
-                        <strong>${escapeHtml(danceEvent.name)}</strong>
-                        <span class="subtle tiny">${danceEvent.remaining_session_count} practice${danceEvent.remaining_session_count === 1 ? "" : "s"} still need scheduling</span>
-                      </div>
-                      <button type="button" class="secondary small" data-focus-dance="${danceEvent.id}">Inspect</button>
-                    </div>
-                  </div>
-                `,
-              )
-              .join("")
-          : renderEmptyState({
-              title: "All active dances are already scheduled",
-              description: "Confirmed practices are locked into the calendar, so there are no open recommendation queues right now.",
-            })
-      }
-    `;
-    return;
-  }
-
-  const focusedEvent = getEventById(state.focusedDanceId);
-  const groups = getVisiblePlanningGroups();
-  recommendationsSubtitle.textContent = focusedEvent
-    ? `${focusedEvent.confirmed_session_count}/${focusedEvent.required_session_count} sessions confirmed`
-    : "Current planning run";
-
-  if (!groups.length) {
-    recommendations.innerHTML = renderEmptyState({
-      title: "No recommendations in this week",
-      description: "Try a different week, sync more calendar data, or adjust the dance deadline and participants.",
-    });
-    return;
-  }
-
-  recommendations.innerHTML = groups
-    .map((group) => {
-      const [bestOption, ...alternatives] = group.recommendations || [];
-      return `
-        <section class="recommendation-group">
-          <div class="participant-meta">
-            <strong>${escapeHtml(group.dance_name)} · Practice ${group.session_index}</strong>
-            <span class="subtle tiny">Best option first, followed by alternatives for the selected dance.</span>
-          </div>
-          ${bestOption ? renderRecommendationCard(bestOption, true) : ""}
-          ${alternatives.map((recommendation) => renderRecommendationCard(recommendation, false)).join("")}
-        </section>
-      `;
-    })
-    .join("");
-}
-
-function openSettingsModal() {
-  danceModal.classList.add("hidden");
-  participantModal.classList.add("hidden");
-  confirmModal.classList.add("hidden");
-  settingsModal.classList.remove("hidden");
-  modalOverlay.classList.remove("hidden");
-}
-
-function openCreateDanceModal() {
-  if (!state.users.length) {
-    showFlash("Create at least one participant before adding a dance.", true);
-    openSettingsModal();
-    return;
-  }
-
-  settingsModal.classList.add("hidden");
-  participantModal.classList.add("hidden");
-  confirmModal.classList.add("hidden");
-  state.editingDanceId = null;
-  addDanceForm.reset();
-  setDefaultDanceDeadline();
-  renderDanceParticipantSelectors();
-  danceModalEyebrow.textContent = "Dance Setup";
-  danceModalTitle.textContent = "Add New Dance";
-  danceModalSubtitle.textContent = "Create a dance event for the multi-practice planner.";
-  submitDanceButton.textContent = "Create dance";
-  danceEditActions.classList.add("hidden");
-  hideInlineError(addDanceError);
-  danceModal.classList.remove("hidden");
-  modalOverlay.classList.remove("hidden");
-}
-
-function openEditDanceModal(eventId) {
-  const danceEvent = getEventById(eventId);
-  if (!danceEvent) {
-    showFlash("Dance not found.", true);
-    return;
-  }
-
-  settingsModal.classList.add("hidden");
-  participantModal.classList.add("hidden");
-  confirmModal.classList.add("hidden");
-  state.editingDanceId = danceEvent.id;
-  danceModalEyebrow.textContent = "Dance Management";
-  danceModalTitle.textContent = `Edit ${danceEvent.name}`;
-  danceModalSubtitle.textContent = "Update details, participant roles, and lifecycle actions for this dance.";
-  submitDanceButton.textContent = "Save changes";
-  danceEditActions.classList.remove("hidden");
-
-  document.getElementById("dance-name").value = danceEvent.name;
-  document.getElementById("dance-session-count").value = danceEvent.required_session_count;
-  document.getElementById("dance-duration-hours").value = `${danceEvent.duration_minutes / 60}`;
-  document.getElementById("dance-deadline").value = toDateInputValue(danceEvent.latest_schedule_at);
-  document.getElementById("dance-description").value = danceEvent.description || "";
-  renderDanceParticipantSelectors(
-    Object.fromEntries(danceEvent.participants.map((participant) => [participant.user_id, participant.role])),
-  );
-  updateDanceActionButtons(danceEvent);
-  hideInlineError(addDanceError);
-  danceModal.classList.remove("hidden");
-  modalOverlay.classList.remove("hidden");
-}
-
-function renderDanceParticipantSelectors(selectedRoles = {}) {
-  addDanceParticipants.innerHTML = state.users
-    .map(
-      (user, index) => `
-        <div class="participant-selector-row">
-          ${renderParticipantChip(user.id, index)}
-          <div class="participant-meta">
-            <strong>${escapeHtml(user.display_name)}</strong>
-            <span class="subtle tiny">${escapeHtml(user.timezone)}</span>
-          </div>
-          <select data-dance-participant="${user.id}">
-            <option value="ignore" ${(selectedRoles[user.id] || "ignore") === "ignore" ? "selected" : ""}>Ignore</option>
-            <option value="required" ${selectedRoles[user.id] === "required" ? "selected" : ""}>Required</option>
-            <option value="optional" ${selectedRoles[user.id] === "optional" ? "selected" : ""}>Optional</option>
-          </select>
-        </div>
-      `,
-    )
-    .join("");
-}
-
-async function submitDanceForm() {
-  hideInlineError(addDanceError);
-  const isEditing = Boolean(state.editingDanceId);
-  const name = document.getElementById("dance-name").value.trim();
-  const requiredSessionCount = Number(document.getElementById("dance-session-count").value);
-  const durationHours = Number(document.getElementById("dance-duration-hours").value);
-  const deadline = document.getElementById("dance-deadline").value;
-  const notes = document.getElementById("dance-description").value.trim();
-
-  const participants = state.users
-    .map((user) => ({
-      user_id: user.id,
-      role: addDanceParticipants.querySelector(`[data-dance-participant="${user.id}"]`)?.value || "ignore",
-    }))
-    .filter((participant) => participant.role !== "ignore");
-
-  if (!name) {
-    throw new Error("Dance name is required.");
-  }
-  if (!deadline) {
-    throw new Error("Deadline is required.");
-  }
-  if (!participants.length) {
-    throw new Error("Select at least one participant.");
-  }
-  if (!participants.some((participant) => participant.role === "required")) {
-    throw new Error("At least one participant must be marked required.");
-  }
-
-  const editingEvent = state.editingDanceId ? getEventById(state.editingDanceId) : null;
-  const payload = {
-    name,
-    description: notes || null,
-    organizer_user_id: editingEvent?.organizer_user_id || state.users[0].id,
-    duration_minutes: Math.round(durationHours * 60),
-    latest_schedule_at: new Date(`${deadline}T23:59:59`).toISOString(),
-    required_session_count: requiredSessionCount,
-    participants,
+function beginDrag(payload) {
+  state.dragState = {
+    ...payload,
+    moved: false,
   };
-
-  const response = state.editingDanceId
-    ? await apiFetch(`/events/${state.editingDanceId}`, {
-        method: "PATCH",
-        body: JSON.stringify(payload),
-      })
-    : await apiFetch("/events", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-
-  state.focusedDanceId = response.id;
-  closeModals();
-  await refreshSchedulerData();
-  showFlash(isEditing ? "Dance updated." : "Dance created.");
 }
 
-async function duplicateDanceEvent(eventId) {
-  const danceEvent = getEventById(eventId);
-  if (!danceEvent) {
-    throw new Error("Dance not found.");
-  }
-
-  const duplicated = await apiFetch("/events", {
-    method: "POST",
-    body: JSON.stringify({
-      name: `${danceEvent.name} Copy`,
-      description: danceEvent.description,
-      organizer_user_id: danceEvent.organizer_user_id,
-      duration_minutes: danceEvent.duration_minutes,
-      latest_schedule_at: danceEvent.latest_schedule_at,
-      required_session_count: danceEvent.required_session_count,
-      participants: danceEvent.participants,
-    }),
-  });
-
-  state.focusedDanceId = duplicated.id;
-  closeModals();
-  await refreshSchedulerData();
-  showFlash("Dance duplicated.");
-}
-
-async function updateDanceStatus(eventId, status) {
-  await apiFetch(`/events/${eventId}`, {
-    method: "PATCH",
-    body: JSON.stringify({ status }),
-  });
-
-  closeModals();
-  await refreshSchedulerData();
-  showFlash(`Dance marked ${formatStatusLabel(status).toLowerCase()}.`);
-}
-
-async function deleteDanceEvent(eventId) {
-  const danceEvent = getEventById(eventId);
-  if (!danceEvent) {
-    throw new Error("Dance not found.");
-  }
-  if (!window.confirm(`Delete "${danceEvent.name}"? This removes its confirmed sessions and recommendations.`)) {
+function handleGlobalPointerMove(event) {
+  if (!state.dragState) {
     return;
   }
 
-  await apiFetch(`/events/${eventId}`, { method: "DELETE" });
-  if (state.focusedDanceId === eventId) {
-    state.focusedDanceId = null;
-  }
-  closeModals();
-  await refreshSchedulerData();
-  showFlash("Dance deleted.");
-}
-
-function openParticipantModal(userId) {
-  const user = getUserById(userId);
-  if (!user) {
-    showFlash("Participant not found.", true);
+  const dayColumns = Array.from(calendar.querySelectorAll(".day-column"));
+  if (!dayColumns.length) {
     return;
   }
 
-  settingsModal.classList.add("hidden");
-  danceModal.classList.add("hidden");
-  confirmModal.classList.add("hidden");
-  state.selectedParticipantId = userId;
-  hideInlineError(participantError);
-  const danceMemberships = getUserDanceMemberships(userId);
-  const organizerCount = state.events.filter((danceEvent) => danceEvent.organizer_user_id === userId).length;
-  const canRemove = danceMemberships.length === 0 && organizerCount === 0;
+  state.dragState.moved = true;
+  const dayIndex = getDayIndexFromPointer(dayColumns, event.clientX);
+  const yMinutes = getMinutesFromPointer(dayColumns[0], event.clientY);
+  const snapMinutes = state.dragState.type === "suggestion" ? Math.max(30, state.planningRun?.slot_step_minutes || 60) : 30;
+  const clampedStartMinutes = clampToGrid(snapMinutes * Math.round((yMinutes - state.dragState.pointerOffsetMinutes) / snapMinutes), state.dragState.durationMinutes);
+  const nextStart = buildWeekDateTime(dayIndex, clampedStartMinutes);
+  const nextEnd = addMinutesIso(nextStart, state.dragState.durationMinutes);
 
-  participantContent.innerHTML = `
-    <div class="participant-pill">
-      ${renderParticipantChip(user.id, state.users.findIndex((candidate) => candidate.id === user.id))}
-      <div class="participant-meta">
-        <strong>${escapeHtml(user.display_name)}</strong>
-        <span class="subtle tiny">${escapeHtml(user.timezone)}${user.email ? ` · ${escapeHtml(user.email)}` : ""}</span>
-      </div>
-    </div>
-    <div class="metric-card">
-      <span class="metric-label">Current dance assignments</span>
-      <span class="metric-value">${danceMemberships.length}</span>
-    </div>
-    ${
-      organizerCount
-        ? `
-          <div class="inline-error">
-            This person is still the organizer for ${organizerCount} dance${organizerCount === 1 ? "" : "s"}. Reassign or delete those dances before removing them globally.
-          </div>
-        `
-        : ""
+  if (state.dragState.type === "suggestion") {
+    const suggestion = getRecommendationById(state.dragState.id);
+    if (!suggestion) {
+      return;
     }
-    ${
-      danceMemberships.length
-        ? `
-          <div class="stack compact-stack">
-            <div class="subtle tiny">Assigned dances</div>
-            ${danceMemberships
-              .map(
-                (danceEvent) => `
-                  <div class="session-pill">
-                    <div class="participant-meta">
-                      <strong>${escapeHtml(danceEvent.name)}</strong>
-                      <span class="subtle tiny">${escapeHtml(
-                        danceEvent.participants.find((participant) => participant.user_id === userId)?.role || "participant",
-                      )}</span>
-                    </div>
-                    <button type="button" class="secondary small" data-focus-dance="${danceEvent.id}">Edit dance</button>
-                  </div>
-                `,
-              )
-              .join("")}
-          </div>
-        `
-        : `<div class="subtle">This participant is not currently assigned to any dance.</div>`
-    }
-  `;
-
-  removeParticipantButton.disabled = !canRemove;
-  participantModal.classList.remove("hidden");
-  modalOverlay.classList.remove("hidden");
-
-  participantContent.querySelectorAll("button[data-focus-dance]").forEach((button) => {
-    button.addEventListener("click", () => {
-      closeModals();
-      state.focusedDanceId = button.dataset.focusDance;
-      openEditDanceModal(button.dataset.focusDance);
-      renderSidebar();
-      renderCalendar();
-      renderRecommendations();
-    });
-  });
+    const draft = ensureSlotDraft(suggestion);
+    draft.start_at = nextStart;
+    draft.end_at = nextEnd;
+    state.selectedSuggestionId = suggestion.id;
+    renderCalendar();
+    renderRightSidebar();
+  } else if (state.dragState.type === "confirmed") {
+    state.confirmedSessionDrafts[state.dragState.id] = {
+      start_at: nextStart,
+      end_at: nextEnd,
+    };
+    renderCalendar();
+  }
 }
 
-async function removeParticipantFromApp(userId) {
-  const user = getUserById(userId);
-  if (!user) {
-    throw new Error("Participant not found.");
-  }
-  if (!window.confirm(`Remove ${user.display_name} from the app?`)) {
+function handleGlobalPointerUp() {
+  if (!state.dragState) {
     return;
   }
-
-  await apiFetch(`/users/${userId}`, { method: "DELETE" });
-  closeModals();
-  await refreshDashboard();
-  showFlash("Participant removed from the app.");
+  state.justFinishedDrag = Boolean(state.dragState.moved);
+  state.dragState = null;
 }
 
-function openConfirmModal(recommendation) {
-  settingsModal.classList.add("hidden");
-  danceModal.classList.add("hidden");
-  participantModal.classList.add("hidden");
-  state.selectedRecommendation = recommendation;
-  hideInlineError(confirmError);
-
-  const danceEvent = getEventById(recommendation.dance_event_id);
-  const missingNames = (recommendation.missing_required_user_ids || []).map((userId) => {
-    const user = getUserById(userId);
-    return user ? user.display_name : "Missing participant";
+function getDayIndexFromPointer(dayColumns, clientX) {
+  const foundIndex = dayColumns.findIndex((column) => {
+    const rect = column.getBoundingClientRect();
+    return clientX >= rect.left && clientX <= rect.right;
   });
 
-  confirmContent.innerHTML = `
-    <div class="confirm-summary">
-      <div class="row" style="justify-content: space-between; align-items: flex-start;">
-        <div class="participant-meta">
-          <strong>${escapeHtml(recommendation.dance_name)}</strong>
-          <span class="subtle tiny">Practice ${recommendation.session_index}</span>
-        </div>
-        <div class="score ${scoreClass(recommendation.total_score)}">${Number(recommendation.total_score).toFixed(2)}</div>
-      </div>
-      <div>${formatShortDateTime(recommendation.start_at)} - ${formatTime(recommendation.end_at)}</div>
-      <div class="row">
-        <span class="tag best">${recommendation.rank === 1 ? "Best option" : `Option ${recommendation.rank}`}</span>
-        ${recommendation.is_fallback ? `<span class="tag fallback">Fallback</span>` : ""}
-      </div>
-      ${
-        missingNames.length
-          ? `<div class="subtle">Missing required participant${missingNames.length === 1 ? "" : "s"}: ${escapeHtml(missingNames.join(", "))}</div>`
-          : ""
-      }
-      ${
-        danceEvent
-          ? `<div class="subtle tiny">${danceEvent.confirmed_session_count}/${danceEvent.required_session_count} sessions already confirmed for this dance.</div>`
-          : ""
-      }
-    </div>
-    <div class="reason-list">
-      ${(recommendation.explanation?.reasons || [])
-        .slice(0, 3)
-        .map((reason) => `<div>${escapeHtml(reason.message)}</div>`)
-        .join("") || `<div>${escapeHtml(recommendation.explanation?.summary || "Selected from the current planning run.")}</div>`}
-    </div>
-  `;
-
-  confirmModal.classList.remove("hidden");
-  modalOverlay.classList.remove("hidden");
-}
-
-async function confirmRecommendation() {
-  hideInlineError(confirmError);
-  if (!state.selectedRecommendation || !state.planningRun) {
-    throw new Error("No recommendation selected.");
+  if (foundIndex >= 0) {
+    return foundIndex;
   }
 
-  await apiFetch(`/planning-runs/${state.planningRun.id}/confirm`, {
-    method: "POST",
-    body: JSON.stringify({
-      result_ids: [state.selectedRecommendation.id],
-    }),
+  const firstRect = dayColumns[0].getBoundingClientRect();
+  const lastRect = dayColumns[dayColumns.length - 1].getBoundingClientRect();
+  if (clientX < firstRect.left) {
+    return 0;
+  }
+  if (clientX > lastRect.right) {
+    return dayColumns.length - 1;
+  }
+  return 0;
+}
+
+function getMinutesFromPointer(firstDayColumn, clientY) {
+  const rect = firstDayColumn.getBoundingClientRect();
+  const offset = clientY - rect.top + calendarScroll.scrollTop;
+  return (offset / HOUR_ROW_HEIGHT) * 60;
+}
+
+function getPointerOffsetMinutes(pointerEvent, element) {
+  const rect = element.getBoundingClientRect();
+  return ((pointerEvent.clientY - rect.top) / HOUR_ROW_HEIGHT) * 60;
+}
+
+function clampToGrid(startMinutes, durationMinutes) {
+  return Math.min(Math.max(startMinutes, 0), TOTAL_GRID_MINUTES - durationMinutes);
+}
+
+function focusSuggestionInCalendar(suggestionId) {
+  requestAnimationFrame(() => {
+    const block = calendar.querySelector(`[data-ghost-id="${suggestionId}"]`);
+    if (!block) {
+      return;
+    }
+    const targetTop = Math.max(block.offsetTop - calendarScroll.clientHeight / 2 + block.clientHeight / 2 - 32, 0);
+    calendarScroll.scrollTo({ top: targetTop, behavior: "smooth" });
   });
-
-  closeModals();
-  await refreshSchedulerData();
-  showFlash("Practice session confirmed.");
 }
 
-function closeModals() {
-  settingsModal.classList.add("hidden");
-  danceModal.classList.add("hidden");
-  participantModal.classList.add("hidden");
-  confirmModal.classList.add("hidden");
-  modalOverlay.classList.add("hidden");
-
-  state.selectedRecommendation = null;
-  state.selectedParticipantId = null;
-  state.editingDanceId = null;
-
-  addDanceForm.reset();
-  setDefaultDanceDeadline();
-  submitDanceButton.textContent = "Create dance";
-  danceEditActions.classList.add("hidden");
-  hideInlineError(addDanceError);
-  hideInlineError(confirmError);
-  hideInlineError(participantError);
+function getSelectedDance() {
+  return getDanceById(state.selectedDanceId);
 }
 
-function renderRecommendationCard(recommendation, isBest) {
-  const missingNames = (recommendation.missing_required_user_ids || []).map((userId) => {
-    const user = getUserById(userId);
-    return user ? user.display_name : "Missing participant";
-  });
-  const reasons = (recommendation.explanation?.reasons || [])
-    .slice(0, 3)
-    .map((reason) => `<div>${escapeHtml(reason.message)}</div>`)
-    .join("");
-
-  return `
-    <div class="recommendation-card ${isBest ? "best" : ""}">
-      <div class="recommendation-card-header">
-        <div class="participant-meta" style="flex: 1;">
-          <strong>${escapeHtml(getWeekday(recommendation.start_at))}</strong>
-          <span>${formatTime(recommendation.start_at)} - ${formatTime(recommendation.end_at)}</span>
-          <span class="subtle tiny">${escapeHtml(recommendation.explanation?.summary || "Ranked from availability and preferences.")}</span>
-        </div>
-        <div>
-          <div class="score ${scoreClass(recommendation.total_score)}">${Number(recommendation.total_score).toFixed(2)}</div>
-          <div class="subtle tiny">planner score</div>
-        </div>
-      </div>
-      <div class="row">
-        ${isBest ? `<span class="tag best">Best option</span>` : ""}
-        ${recommendation.is_fallback ? `<span class="tag fallback">Fallback</span>` : ""}
-      </div>
-      <div class="reason-list">
-        ${reasons || `<div>${escapeHtml(recommendation.explanation?.summary || "")}</div>`}
-        ${
-          missingNames.length
-            ? `<div>Missing required participant${missingNames.length === 1 ? "" : "s"}: ${escapeHtml(missingNames.join(", "))}</div>`
-            : ""
-        }
-      </div>
-      <button type="button" data-result-id="${recommendation.id}">Select this time</button>
-    </div>
-  `;
+function getDanceById(danceId) {
+  return state.events.find((dance) => dance.id === danceId) || null;
 }
 
-function renderBusyBlock(interval, column, columnCount) {
-  const placement = getPlacement(interval.start_at, interval.end_at);
-  if (!placement) {
-    return "";
+function getActivePractice() {
+  if (!state.selectedDanceId || !state.activePracticeKey) {
+    return null;
   }
-  const user = getUserById(interval.user_id);
-  const index = state.users.findIndex((candidate) => candidate.id === interval.user_id);
-  return `
-    <div
-      class="calendar-block busy"
-      style="${blockPlacementStyle(placement, column, columnCount)} background:${getParticipantColor(index)}88;"
-    >
-      <div class="block-title">${escapeHtml(user ? user.display_name : "Busy")}</div>
-      <div class="block-subtitle">Busy · ${formatTime(interval.start_at)} - ${formatTime(interval.end_at)}</div>
-    </div>
-  `;
-}
-
-function renderRecommendationBlock(recommendation, column, columnCount) {
-  const placement = getPlacement(recommendation.start_at, recommendation.end_at);
-  if (!placement) {
-    return "";
+  const [danceId, sessionIndex] = state.activePracticeKey.split("::");
+  if (danceId !== state.selectedDanceId) {
+    return null;
   }
-
-  return `
-    <button
-      type="button"
-      class="calendar-block recommendation"
-      data-calendar-recommendation="${recommendation.id}"
-      style="${blockPlacementStyle(placement, column, columnCount, 6)}"
-    >
-      <div class="block-title">${escapeHtml(recommendation.dance_name)}</div>
-      <div class="block-subtitle">${formatTime(recommendation.start_at)} - ${formatTime(recommendation.end_at)}</div>
-      <div class="block-subtitle">${recommendation.rank === 1 ? "Best option" : `Option ${recommendation.rank}`}</div>
-    </button>
-  `;
+  return {
+    danceId,
+    sessionIndex: Number(sessionIndex),
+  };
 }
 
-function renderConfirmedBlock(session) {
-  const placement = getPlacement(session.start_at, session.end_at);
-  if (!placement) {
-    return "";
-  }
-  const danceEvent = getEventById(session.dance_event_id);
-  const isFocused = !state.focusedDanceId || session.dance_event_id === state.focusedDanceId;
-  return `
-    <div
-      class="calendar-block confirmed"
-      style="top:${placement.top}px;height:${placement.height}px;left:4px;right:4px;opacity:${isFocused ? 1 : 0.78};"
-    >
-      <div class="block-title">${escapeHtml(danceEvent ? danceEvent.name : "Practice session")}</div>
-      <div class="block-subtitle">${formatTime(session.start_at)} - ${formatTime(session.end_at)}</div>
-      <div class="block-subtitle">Confirmed practice</div>
-    </div>
-  `;
-}
-
-function getVisiblePlanningGroups() {
-  if (!state.planningRun?.results || !state.focusedDanceId) {
+function getActiveSuggestions() {
+  const activePractice = getActivePractice();
+  if (!activePractice || !state.planningRun?.results) {
     return [];
   }
-  return state.planningRun.results.filter((group) => group.dance_event_id === state.focusedDanceId);
+  return state.planningRun.results
+    .find(
+      (group) =>
+        group.dance_event_id === activePractice.danceId &&
+        group.session_index === activePractice.sessionIndex,
+    )
+    ?.recommendations.slice(0, 3) || [];
 }
 
-function getRecommendationById(resultId) {
-  return buildRecommendationIndex()[resultId] || null;
+function getRecommendationById(recommendationId) {
+  return (state.planningRun?.results || [])
+    .flatMap((group) => group.recommendations || [])
+    .find((recommendation) => recommendation.id === recommendationId) || null;
 }
 
-function buildRecommendationIndex() {
-  const results = state.planningRun?.results || [];
-  return Object.fromEntries(
-    results
-      .flatMap((group) => group.recommendations || [])
-      .map((recommendation) => [recommendation.id, recommendation]),
+function getSelectedSuggestion() {
+  return getRecommendationById(state.selectedSuggestionId);
+}
+
+function getPracticeRows(danceId) {
+  const sessions = getSessionsForDance(danceId);
+  const dance = getDanceById(danceId);
+  if (!dance) {
+    return [];
+  }
+
+  return Array.from({ length: dance.required_session_count }, (_, index) => {
+    const sessionIndex = index + 1;
+    const session = sessions.find((item) => item.session_index === sessionIndex);
+    return {
+      sessionIndex,
+      status: session ? "scheduled" : "unscheduled",
+      session,
+    };
+  });
+}
+
+function getSessionsForDance(danceId) {
+  return (state.eventSessions[danceId] || [])
+    .slice()
+    .sort((left, right) => left.session_index - right.session_index);
+}
+
+function getNextPracticeForDance(danceId) {
+  return getPracticeRows(danceId).find((practice) => practice.status === "unscheduled") || null;
+}
+
+function practiceExists(danceId, sessionIndex) {
+  return getPracticeRows(danceId).some((practice) => practice.sessionIndex === sessionIndex);
+}
+
+function getVisibleBusyIntervals() {
+  return state.calendarOverview.busy_intervals.filter((interval) => state.participantVisibility[interval.user_id] !== false);
+}
+
+function getRenderedPracticeSessions() {
+  return state.calendarOverview.practice_sessions.map((session) => {
+    const preview = state.confirmedSessionDrafts[session.id] || {};
+    const dance = getDanceById(session.dance_event_id);
+    return {
+      ...session,
+      dance_name: dance?.name || "Dance",
+      start_at: preview.start_at || session.start_at,
+      end_at: preview.end_at || session.end_at,
+      location: getLocationLabel(session.dance_event_id, session.session_index),
+    };
+  });
+}
+
+function getSuggestionDisplay(recommendation) {
+  const draft = getSlotDraft(recommendation.id);
+  return {
+    ...recommendation,
+    start_at: draft?.start_at || recommendation.start_at,
+    end_at: draft?.end_at || recommendation.end_at,
+    location: draft?.location || getLocationLabel(recommendation.dance_event_id, recommendation.session_index),
+  };
+}
+
+function ensureSlotDraft(recommendation) {
+  if (!state.slotDrafts[recommendation.id]) {
+    state.slotDrafts[recommendation.id] = {
+      start_at: recommendation.start_at,
+      end_at: recommendation.end_at,
+      location: "",
+    };
+  }
+  return state.slotDrafts[recommendation.id];
+}
+
+function getSlotDraft(recommendationId) {
+  return state.slotDrafts[recommendationId] || null;
+}
+
+function isSuggestionTimeModified(recommendationId) {
+  const recommendation = getRecommendationById(recommendationId);
+  const draft = getSlotDraft(recommendationId);
+  if (!recommendation || !draft) {
+    return false;
+  }
+  return draft.start_at !== recommendation.start_at || draft.end_at !== recommendation.end_at;
+}
+
+function getLocationLabel(danceId, sessionIndex) {
+  return state.sessionLocationOverrides[practiceKey(danceId, sessionIndex)] || DEFAULT_ROOM_LABEL;
+}
+
+function getAvailableParticipantNames(recommendation) {
+  const available = recommendation.participant_statuses
+    .filter((item) => item.available)
+    .map((item) => getUserById(item.user_id)?.display_name)
+    .filter(Boolean);
+
+  if (available.length) {
+    return available;
+  }
+
+  const dance = getDanceById(recommendation.dance_event_id);
+  return (dance?.participants || [])
+    .filter((participant) => participant.role === "required")
+    .map((participant) => getUserById(participant.user_id)?.display_name)
+    .filter(Boolean);
+}
+
+function getConflictText(recommendation) {
+  const missingRequired = (recommendation.missing_required_user_ids || [])
+    .map((userId) => getUserById(userId)?.display_name)
+    .filter(Boolean);
+  if (missingRequired.length) {
+    return `Missing required: ${missingRequired.join(", ")}`;
+  }
+
+  const unavailable = recommendation.participant_statuses
+    .filter((item) => !item.available)
+    .map((item) => getUserById(item.user_id)?.display_name)
+    .filter(Boolean);
+
+  return unavailable.length ? unavailable.join(", ") : "None";
+}
+
+function getReasonText(recommendation) {
+  return (
+    recommendation.explanation?.summary ||
+    recommendation.explanation?.reasons?.[0]?.message ||
+    "Fits all participants, avoids late-night hours."
   );
 }
 
-function getVisibleParticipants() {
-  if (!state.events.length) {
-    return state.users;
-  }
-  const visibleEventIds = state.focusedDanceId
-    ? [state.focusedDanceId]
-    : state.events.map((danceEvent) => danceEvent.id);
-  const participantIds = new Set();
-  visibleEventIds.forEach((eventId) => {
-    const danceEvent = getEventById(eventId);
-    (danceEvent?.participants || []).forEach((participant) => participantIds.add(participant.user_id));
-  });
-
-  if (!participantIds.size) {
-    return state.users;
-  }
-  return state.users.filter((user) => participantIds.has(user.id));
+function displayScore(recommendation) {
+  const base = Number.isFinite(Number(recommendation.total_score)) ? Number(recommendation.total_score) : recommendation.rank;
+  return Math.max(70, Math.min(99, Math.round(82 + base * 5 - (recommendation.rank - 1) * 3)));
 }
 
-function getEventById(eventId) {
-  return state.events.find((danceEvent) => danceEvent.id === eventId) || null;
+function getUserById(userId) {
+  return state.users.find((user) => user.id === userId) || null;
 }
 
-function getSessionsForEvent(eventId) {
-  return (state.eventSessions[eventId] || []).slice().sort((left, right) => left.start_at.localeCompare(right.start_at));
+function getParticipantColorByUserId(userId) {
+  const index = state.users.findIndex((user) => user.id === userId);
+  return PARTICIPANT_COLORS[Math.max(index, 0) % PARTICIPANT_COLORS.length];
 }
 
-function getUserDanceMemberships(userId) {
-  return state.events.filter((danceEvent) => danceEvent.participants.some((participant) => participant.user_id === userId));
+function expandBusySegments(intervals, weekDays) {
+  return intervals.flatMap((interval) => splitAcrossWeek(interval, weekDays, (segment) => {
+    const user = getUserById(interval.user_id);
+    return {
+      ...segment,
+      id: interval.id,
+      user_id: interval.user_id,
+      user_name: user?.display_name || "Busy",
+    };
+  }));
 }
 
-function mergeParticipantVisibility() {
-  state.users.forEach((user) => {
-    if (!(user.id in state.participantVisibility)) {
-      state.participantVisibility[user.id] = true;
+function expandSuggestionSegments(suggestions, weekDays) {
+  return suggestions.flatMap((suggestion) => splitAcrossWeek(suggestion, weekDays, (segment) => ({
+    ...segment,
+    id: suggestion.id,
+    dance_name: suggestion.dance_name,
+    session_index: suggestion.session_index,
+  })));
+}
+
+function expandConfirmedSegments(sessions, weekDays) {
+  return sessions.flatMap((session) => splitAcrossWeek(session, weekDays, (segment) => ({
+    ...segment,
+    id: session.id,
+    dance_name: session.dance_name,
+    session_index: session.session_index,
+    location: session.location,
+  })));
+}
+
+function splitAcrossWeek(item, weekDays, mapper) {
+  const start = new Date(item.start_at);
+  const end = new Date(item.end_at);
+  return weekDays.flatMap((day) => {
+    const dayStart = new Date(day);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = addDays(dayStart, 1);
+    const segmentStart = new Date(Math.max(start.getTime(), dayStart.getTime()));
+    const segmentEnd = new Date(Math.min(end.getTime(), dayEnd.getTime()));
+    if (segmentEnd <= segmentStart) {
+      return [];
     }
+    return [
+      mapper({
+        start_at: segmentStart.toISOString(),
+        end_at: segmentEnd.toISOString(),
+        dayKey: toDayKey(dayStart),
+      }),
+    ];
   });
 }
 
-function pruneStaleState() {
-  const validUserIds = new Set(state.users.map((user) => user.id));
-  Object.keys(state.participantVisibility).forEach((userId) => {
-    if (!validUserIds.has(userId)) {
-      delete state.participantVisibility[userId];
+function groupByDay(items) {
+  return items.reduce((accumulator, item) => {
+    const key = item.dayKey || toDayKey(item.start_at);
+    if (!accumulator[key]) {
+      accumulator[key] = [];
     }
-  });
-  Object.keys(state.connections).forEach((userId) => {
-    if (!validUserIds.has(userId)) {
-      delete state.connections[userId];
-      delete state.calendars[userId];
-    }
-  });
-}
-
-function updateDanceActionButtons(danceEvent) {
-  toggleDanceStatusButton.textContent = getToggleDanceStatusLabel(danceEvent);
-  archiveDanceButton.textContent = danceEvent.status === "archived" ? "Restore" : "Archive";
-}
-
-function getToggleDanceStatusLabel(danceEvent) {
-  return ["completed", "archived"].includes(danceEvent.status) ? "Reopen dance" : "Mark complete";
-}
-
-function getToggleDanceStatusValue(danceEvent) {
-  return ["completed", "archived"].includes(danceEvent.status) ? deriveAutomaticEventStatus(danceEvent) : "completed";
-}
-
-function deriveAutomaticEventStatus(danceEvent) {
-  if (danceEvent.confirmed_session_count <= 0) {
-    return "unscheduled";
-  }
-  if (danceEvent.confirmed_session_count >= danceEvent.required_session_count) {
-    return "scheduled";
-  }
-  return "partially_scheduled";
+    accumulator[key].push(item);
+    return accumulator;
+  }, {});
 }
 
 function layoutOverlappingItems(items) {
-  const sortedItems = [...items].sort((left, right) => {
+  const sorted = [...items].sort((left, right) => {
     if (left.start_at !== right.start_at) {
       return left.start_at.localeCompare(right.start_at);
     }
@@ -1587,7 +1744,7 @@ function layoutOverlappingItems(items) {
     clusterMaxEnd = -Infinity;
   };
 
-  sortedItems.forEach((item) => {
+  sorted.forEach((item) => {
     const itemStart = new Date(item.start_at).getTime();
     const itemEnd = new Date(item.end_at).getTime();
 
@@ -1629,48 +1786,28 @@ function getPlacement(startAt, endAt) {
   };
 }
 
-function blockPlacementStyle(placement, column, columnCount, inset = 4) {
+function blockPlacementStyle(placement, column, columnCount) {
+  const inset = 4;
   const width = 100 / columnCount;
   return [
     `top:${placement.top}px`,
     `height:${placement.height}px`,
-    `left:calc(${width * column}% + ${inset}px)`,
+    `left:calc(${column * width}% + ${inset}px)`,
     `width:calc(${width}% - ${inset * 2}px)`,
   ].join(";");
 }
 
-function renderEmptyState({ title, description, actionLabel = "", action = "" }) {
-  return `
-    <div class="empty-state">
-      <strong>${escapeHtml(title)}</strong>
-      <p>${escapeHtml(description)}</p>
-      ${
-        actionLabel && action
-          ? `<button type="button" class="secondary small empty-state-action" data-empty-action="${escapeHtml(action)}">${escapeHtml(actionLabel)}</button>`
-          : ""
-      }
-    </div>
-  `;
-}
-
-function renderParticipantChip(userId, fallbackIndex = 0) {
-  const user = getUserById(userId);
-  const index = state.users.findIndex((candidate) => candidate.id === userId);
-  const background = getParticipantColor(index >= 0 ? index : fallbackIndex);
-  return `<span class="participant-chip" style="background:${background};">${escapeHtml(getInitials(user?.display_name || "User"))}</span>`;
-}
-
-function getUserById(userId) {
-  return state.users.find((user) => user.id === userId) || null;
-}
-
-function getParticipantColor(index) {
-  return PARTICIPANT_COLORS[Math.max(index, 0) % PARTICIPANT_COLORS.length];
+function mergeParticipantVisibility() {
+  state.users.forEach((user) => {
+    if (!(user.id in state.participantVisibility)) {
+      state.participantVisibility[user.id] = true;
+    }
+  });
 }
 
 function updateRefreshButton() {
   refreshDashboardButton.disabled = state.isRefreshing;
-  refreshDashboardButton.textContent = state.isRefreshing ? "Refreshing..." : "Refresh data";
+  refreshDashboardButton.textContent = state.isRefreshing ? "Refreshing..." : "Refresh";
 }
 
 function getWeekRange() {
@@ -1682,6 +1819,59 @@ function getWeekRange() {
     startIso: start.toISOString(),
     endIso: end.toISOString(),
   };
+}
+
+function getPlanningHorizon(visibleEndIso = null) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const minimumEnd = addDays(today, 14);
+  minimumEnd.setHours(0, 0, 0, 0);
+
+  const visibleEnd = visibleEndIso ? new Date(visibleEndIso) : null;
+  const finalEnd =
+    visibleEnd && !Number.isNaN(visibleEnd.getTime()) && visibleEnd > minimumEnd
+      ? visibleEnd
+      : minimumEnd;
+
+  return {
+    startIso: today.toISOString(),
+    endIso: finalEnd.toISOString(),
+  };
+}
+
+function buildWeekDateTime(dayIndex, gridMinutes) {
+  const date = addDays(state.weekStart, dayIndex);
+  date.setHours(0, 0, 0, 0);
+  return addMinutesIso(date.toISOString(), GRID_START_HOUR * 60 + gridMinutes);
+}
+
+function practiceKey(danceId, sessionIndex) {
+  return `${danceId}::${sessionIndex}`;
+}
+
+function getDurationMinutes(startAt, endAt) {
+  return Math.max(30, Math.round((new Date(endAt).getTime() - new Date(startAt).getTime()) / 60000));
+}
+
+function addMinutesIso(value, minutes) {
+  const date = new Date(value);
+  date.setMinutes(date.getMinutes() + minutes);
+  return date.toISOString();
+}
+
+function deriveDanceStatus(dance) {
+  if (dance.confirmed_session_count <= 0) {
+    return "unscheduled";
+  }
+  if (dance.confirmed_session_count >= dance.required_session_count) {
+    return "scheduled";
+  }
+  return "partially_scheduled";
+}
+
+function formatStatusLabel(status) {
+  return status.replaceAll("_", " ");
 }
 
 function showCallbackMessage() {
@@ -1697,9 +1887,15 @@ function showCallbackMessage() {
 }
 
 function showFlash(message, isError = false) {
+  flash.textContent = message;
   flash.classList.remove("hidden", "error");
   flash.classList.toggle("error", isError);
-  flash.innerHTML = `<div>${escapeHtml(message)}</div>`;
+  if (state.flashTimeoutId) {
+    window.clearTimeout(state.flashTimeoutId);
+  }
+  state.flashTimeoutId = window.setTimeout(() => {
+    flash.classList.add("hidden");
+  }, 4200);
 }
 
 function showInlineError(element, message) {
@@ -1710,6 +1906,15 @@ function showInlineError(element, message) {
 function hideInlineError(element) {
   element.textContent = "";
   element.classList.add("hidden");
+}
+
+function renderEmptyState(title, description) {
+  return `
+    <div class="empty-state">
+      <strong>${escapeHtml(title)}</strong>
+      <p>${escapeHtml(description)}</p>
+    </div>
+  `;
 }
 
 function apiFetch(path, options = {}) {
@@ -1731,15 +1936,23 @@ function apiFetch(path, options = {}) {
   });
 }
 
-function scoreClass(score) {
-  const value = Number(score);
-  if (value >= 2.5) {
-    return "good";
-  }
-  if (value >= 1.5) {
-    return "ok";
-  }
-  return "low";
+function setDefaultDanceDeadline() {
+  const defaultDate = addDays(new Date(), 14);
+  document.getElementById("dance-deadline").value = toDateInputValue(defaultDate);
+}
+
+function formatWeekLabel(weekStart) {
+  const weekEnd = addDays(weekStart, 6);
+  return `${weekStart.toLocaleDateString(undefined, { month: "short", day: "numeric" })} - ${weekEnd.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+}
+
+function formatSlotTitle(startAt, endAt) {
+  const dayText = new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  }).format(new Date(startAt));
+  return `${dayText} · ${formatTime(startAt)}-${formatTime(endAt)}`;
 }
 
 function formatDate(value) {
@@ -1750,13 +1963,10 @@ function formatDate(value) {
   }).format(new Date(value));
 }
 
-function formatShortDateTime(value) {
+function formatShortDate(value) {
   return new Intl.DateTimeFormat(undefined, {
-    weekday: "short",
     month: "short",
     day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
   }).format(new Date(value));
 }
 
@@ -1772,66 +1982,58 @@ function formatDurationHours(durationMinutes) {
   return `${hours % 1 === 0 ? hours.toFixed(0) : hours.toFixed(1)}h`;
 }
 
-function formatWeekLabel(weekStart) {
-  const weekEnd = addDays(weekStart, 6);
-  return `${weekStart.toLocaleDateString(undefined, { month: "short", day: "numeric" })} - ${weekEnd.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
-}
-
 function formatHourLabel(hour) {
-  if (hour === 12) {
-    return "12 PM";
-  }
-  if (hour > 12) {
-    return `${hour - 12} PM`;
-  }
-  return `${hour} AM`;
-}
-
-function formatStatusLabel(status) {
-  return status.replaceAll("_", " ");
-}
-
-function getWeekday(value) {
-  return new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(new Date(value));
-}
-
-function startOfWeek(date) {
-  const copy = new Date(date);
-  const day = copy.getDay();
-  const offset = (day + 6) % 7;
-  copy.setHours(0, 0, 0, 0);
-  copy.setDate(copy.getDate() - offset);
-  return copy;
-}
-
-function addDays(date, amount) {
-  const copy = new Date(date);
-  copy.setDate(copy.getDate() + amount);
-  return copy;
-}
-
-function toDayKey(dateLike) {
-  const date = new Date(dateLike);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  const date = new Date();
+  date.setHours(hour, 0, 0, 0);
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+  }).format(date);
 }
 
 function toDateInputValue(value) {
   const date = new Date(value);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
-function getInitials(displayName) {
-  return displayName
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((word) => word[0]?.toUpperCase() || "")
-    .join("");
+function toLocalDateTimeInputValue(value) {
+  const date = new Date(value);
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  const hours = `${date.getHours()}`.padStart(2, "0");
+  const minutes = `${date.getMinutes()}`.padStart(2, "0");
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
-function setDefaultDanceDeadline() {
-  const deadline = addDays(new Date(), 7);
-  document.getElementById("dance-deadline").value = `${deadline.getFullYear()}-${String(deadline.getMonth() + 1).padStart(2, "0")}-${String(deadline.getDate()).padStart(2, "0")}`;
+function fromLocalDateTimeInputValue(value) {
+  if (!value) {
+    return null;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function toDayKey(value) {
+  const date = new Date(value);
+  return `${date.getFullYear()}-${`${date.getMonth() + 1}`.padStart(2, "0")}-${`${date.getDate()}`.padStart(2, "0")}`;
+}
+
+function startOfWeek(value) {
+  const date = new Date(value);
+  date.setHours(0, 0, 0, 0);
+  const day = date.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  date.setDate(date.getDate() + diff);
+  return date;
+}
+
+function addDays(value, count) {
+  const date = new Date(value);
+  date.setDate(date.getDate() + count);
+  return date;
 }
 
 function escapeHtml(value) {
@@ -1840,5 +2042,9 @@ function escapeHtml(value) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+    .replaceAll("'", "&#39;");
+}
+
+function escapeAttribute(value) {
+  return escapeHtml(value);
 }
