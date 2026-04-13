@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import logging
+from types import SimpleNamespace
 from typing import Optional
 from uuid import UUID
 
@@ -18,6 +20,7 @@ from app.domain.scheduling.global_planner import (
 )
 from app.domain.scheduling.models import ParticipantContext
 from app.infrastructure.db.models import (
+    CalendarConnection,
     CalendarBusyInterval,
     DanceEvent,
     PlanningRun,
@@ -27,6 +30,8 @@ from app.infrastructure.db.models import (
     User,
     UserParsedPreference,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class PlanningService:
@@ -257,6 +262,15 @@ class PlanningService:
             user.id: user
             for user in self.db.scalars(select(User).where(User.id.in_(all_user_ids)))
         }
+        connected_user_ids = {
+            row.user_id
+            for row in self.db.scalars(
+                select(CalendarConnection)
+                .where(CalendarConnection.user_id.in_(participant_user_ids))
+                .where(CalendarConnection.provider == "google")
+            )
+            if row.refresh_token or row.access_token
+        }
 
         manual_by_user = defaultdict(list)
         from app.infrastructure.db.models import ManualAvailabilityInterval  # local import to avoid circular lint noise
@@ -301,9 +315,26 @@ class PlanningService:
                 user = users.get(participant.user_id)
                 if user is None:
                     raise ValueError("Event participant user not found")
+                manual_intervals = manual_by_user.get(participant.user_id, [])
+                if not manual_intervals and participant.user_id in connected_user_ids:
+                    manual_intervals = [
+                        SimpleNamespace(
+                            start_at=horizon_start,
+                            end_at=horizon_end,
+                        )
+                    ]
                 effective = build_effective_availability(
-                    manual_intervals=manual_by_user.get(participant.user_id, []),
+                    manual_intervals=manual_intervals,
                     busy_intervals=busy_by_user.get(participant.user_id, []),
+                )
+                logger.info(
+                    "planning participant availability event=%s user=%s role=%s manual_intervals=%s busy_intervals=%s effective_intervals=%s",
+                    event.id,
+                    participant.user_id,
+                    participant.role,
+                    len(manual_intervals),
+                    len(busy_by_user.get(participant.user_id, [])),
+                    len(effective),
                 )
                 participant_contexts.append(
                     ParticipantContext(
@@ -318,6 +349,16 @@ class PlanningService:
             organizer = users.get(event.organizer_user_id)
             if organizer is None:
                 raise ValueError("Event organizer not found")
+            logger.info(
+                "planning event input event=%s name=%s duration_minutes=%s latest_schedule_at=%s next_session_index=%s sessions_remaining=%s required_participants=%s",
+                event.id,
+                event.name,
+                event.duration_minutes,
+                event.latest_schedule_at,
+                confirmed_count + 1,
+                sessions_remaining,
+                sum(1 for participant in event.participants if participant.role == "required"),
+            )
             event_inputs.append(
                 PlanningEventInput(
                     dance_event_id=event.id,
