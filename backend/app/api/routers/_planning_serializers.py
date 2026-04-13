@@ -27,6 +27,8 @@ def serialize_event(event: DanceEvent) -> DanceEventRead:
         description=event.description,
         organizer_user_id=event.organizer_user_id,
         duration_minutes=event.duration_minutes,
+        earliest_start_date=event.earliest_start_date,
+        min_days_apart=event.min_days_apart,
         latest_schedule_at=ensure_utc(event.latest_schedule_at),
         required_session_count=event.required_session_count,
         confirmed_session_count=confirmed_session_count,
@@ -50,6 +52,9 @@ def serialize_practice_session(session: PracticeSession) -> PracticeSessionRead:
         room_id=session.room_id,
         source_run_id=session.source_run_id,
         total_score=float(session.total_score) if session.total_score is not None else None,
+        google_calendar_event_id=session.google_calendar_event_id,
+        google_calendar_id=session.google_calendar_id,
+        google_calendar_html_link=session.google_calendar_html_link,
         is_fallback=session.is_fallback,
         missing_required_user_ids=[UUID(value) for value in session.missing_required_user_ids_json or []],
         score_breakdown={key: float(value) for key, value in (session.score_breakdown_json or {}).items()},
@@ -78,6 +83,7 @@ def serialize_planning_run(run: PlanningRun) -> PlanningRunRead:
         id=run.id,
         room_id=run.room_id,
         status=run.status,
+        message=_planning_run_message(run),
         horizon_start=ensure_utc(run.horizon_start),
         horizon_end=ensure_utc(run.horizon_end),
         slot_step_minutes=run.slot_step_minutes,
@@ -132,3 +138,9 @@ def _serialize_explanation(explanation_json: dict) -> PlanningExplanationRead:
 
 def _optional_available_count(participant_statuses_json: list[dict]) -> int:
     return sum(1 for item in participant_statuses_json if item.get("role") == "optional" and item.get("available"))
+
+
+def _planning_run_message(run: PlanningRun) -> str | None:
+    if run.status == "no_results":
+        return "No availability found between 8:00 AM and 12:00 PM."
+    return None

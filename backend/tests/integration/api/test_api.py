@@ -2,8 +2,11 @@ from datetime import datetime, timezone
 from datetime import timedelta
 from typing import Optional
 
+from app.infrastructure.config import Settings
 from app.infrastructure.db.models import CalendarBusyInterval, CalendarConnection
 from app.infrastructure.integrations.google_calendar.client import GoogleBusyInterval, GoogleCalendarSummary, GoogleCreatedEvent
+from app.infrastructure.integrations.llm.profile_preference_parser import GroqUserProfilePreferenceParser
+from app.main import create_app
 
 
 def test_user_availability_schedule_run_happy_path(client) -> None:
@@ -101,6 +104,89 @@ def test_create_user_returns_422_for_invalid_timezone(client) -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"][0]["loc"] == ["body", "timezone"]
+
+
+def test_user_profile_can_store_preferred_practice_time(client) -> None:
+    create_response = client.post(
+        "/api/v1/users",
+        json={
+            "display_name": "Profile User",
+            "timezone": "UTC",
+            "email": "profile-user@example.com",
+            "preferred_practice_time": "mid_morning",
+        },
+    )
+
+    assert create_response.status_code == 201
+    user = create_response.json()
+    assert user["preferred_practice_time"] == "mid_morning"
+
+    update_response = client.patch(
+        f"/api/v1/users/{user['id']}",
+        json={"preferred_practice_time": "late_morning"},
+    )
+
+    assert update_response.status_code == 200
+    assert update_response.json()["preferred_practice_time"] == "late_morning"
+
+    read_response = client.get(f"/api/v1/users/{user['id']}")
+    assert read_response.status_code == 200
+    assert read_response.json()["preferred_practice_time"] == "late_morning"
+
+
+def test_user_profile_caches_parsed_free_text_preferences(client, app) -> None:
+    class FakeProfileParser:
+        version = "fake-profile-v1"
+
+        def parse(self, raw_text: str, timezone_name: str) -> dict:
+            assert timezone_name == "UTC"
+            return {
+                "preferred_days": ["Saturday", "Sunday"],
+                "avoid_days": ["Friday"],
+                "earliest_time": "09:00",
+                "latest_time": "12:00",
+                "notes": raw_text,
+                "summary": "prefers weekends, avoids Fridays, never before 9:00 AM",
+            }
+
+    app.state.user_profile_preference_parser = FakeProfileParser()
+
+    response = client.post(
+        "/api/v1/users",
+        json={
+            "display_name": "Profile Parse User",
+            "timezone": "UTC",
+            "email": "profile-parse@example.com",
+            "preferred_practice_time_raw": "weekends, never before 9am, avoid Fridays",
+        },
+    )
+
+    assert response.status_code == 201
+    user = response.json()
+    assert user["preferred_practice_time_raw"] == "weekends, never before 9am, avoid Fridays"
+    assert user["preferred_practice_time_parsed"] == {
+        "preferred_days": ["Saturday", "Sunday"],
+        "avoid_days": ["Friday"],
+        "earliest_time": "09:00",
+        "latest_time": "12:00",
+        "notes": "weekends, never before 9am, avoid Fridays",
+        "summary": "prefers weekends, avoids Fridays, never before 9:00 AM",
+    }
+    assert user["preferred_practice_time_summary"] == (
+        "Understood: prefers weekends, avoids Fridays, never before 9:00 AM"
+    )
+
+
+def test_app_bootstraps_groq_profile_parser_from_groq_env(monkeypatch, session_factory) -> None:
+    monkeypatch.setenv("GROQ_API_KEY", "groq-demo-key")
+    settings = Settings(database_url="sqlite:///ignored.db", parser_mode="stub")
+
+    app = create_app(settings=settings, session_factory=session_factory)
+
+    parser = app.state.user_profile_preference_parser
+    assert isinstance(parser, GroqUserProfilePreferenceParser)
+    assert settings.groq_api_key == "groq-demo-key"
+    assert parser.api_key == "groq-demo-key"
 
 
 def test_connected_google_users_can_schedule_without_manual_availability(client, app) -> None:

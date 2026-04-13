@@ -25,4 +25,4 @@ __pycache__/
 .vscode/
 
 # snapshots
-PROJECT_SNAPSHOT_*.md
+PROJECT_SNAPSHOT_*.md.env

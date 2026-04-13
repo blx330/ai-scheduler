@@ -90,6 +90,7 @@ class PlanningRunRead(BaseModel):
     id: UUID
     room_id: UUID
     status: str
+    message: Optional[str] = None
     horizon_start: datetime
     horizon_end: datetime
     slot_step_minutes: int
@@ -120,6 +121,9 @@ class PracticeSessionRead(BaseModel):
     room_id: UUID
     source_run_id: Optional[UUID] = None
     total_score: Optional[float] = None
+    google_calendar_event_id: Optional[str] = None
+    google_calendar_id: Optional[str] = None
+    google_calendar_html_link: Optional[str] = None
     is_fallback: bool
     missing_required_user_ids: list[UUID] = Field(default_factory=list)
     score_breakdown: dict[str, float] = Field(default_factory=dict)
@@ -143,3 +147,11 @@ class CalendarOverviewRead(BaseModel):
     end_at: datetime
     busy_intervals: list[CalendarBusyIntervalRead] = Field(default_factory=list)
     practice_sessions: list[PracticeSessionRead] = Field(default_factory=list)
+
+
+class PracticeUnscheduleResponse(BaseModel):
+    practice_id: UUID
+    dance_event_id: UUID
+    unscheduled: bool
+    google_event_deleted: bool
+    warning: Optional[str] = None

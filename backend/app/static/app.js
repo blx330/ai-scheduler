@@ -8,6 +8,7 @@ const PARTICIPANT_COLORS = [
   "#f8d6ef",
   "#e4f3c7",
 ];
+const STRICT_PRACTICE_WINDOW_LABEL = "8:00 AM-12:00 PM";
 
 const GRID_START_HOUR = 7;
 const GRID_END_HOUR = 24;
@@ -75,6 +76,9 @@ const danceModal = document.getElementById("add-dance-modal");
 const usersList = document.getElementById("users-list");
 const userForm = document.getElementById("user-form");
 const timezoneInput = document.getElementById("timezone");
+const preferredPracticeTimeRawInput = document.getElementById("preferred-practice-time-raw");
+const preferredPracticePreview = document.getElementById("preferred-practice-preview");
+const preferredPracticePreviewText = document.getElementById("preferred-practice-preview-text");
 const addDanceForm = document.getElementById("add-dance-form");
 const addDanceParticipants = document.getElementById("add-dance-participants");
 const addDanceError = document.getElementById("add-dance-error");
@@ -82,6 +86,8 @@ const danceModalEyebrow = document.getElementById("dance-modal-eyebrow");
 const danceModalTitle = document.getElementById("dance-modal-title");
 const danceModalSubtitle = document.getElementById("dance-modal-subtitle");
 const submitDanceButton = document.getElementById("submit-add-dance");
+const dancePracticesSection = document.getElementById("dance-practices-section");
+const dancePracticesList = document.getElementById("dance-practices-list");
 
 bindStaticListeners();
 initialize();
@@ -143,6 +149,13 @@ function bindStaticListeners() {
     } catch (error) {
       showFlash(error.message, true);
     }
+  });
+
+  preferredPracticeTimeRawInput.addEventListener("input", () => {
+    if (preferredPracticeTimeRawInput.value.trim()) {
+      return;
+    }
+    setUserFormPreferencePreview("");
   });
 
   addDanceForm.addEventListener("submit", async (event) => {
@@ -229,6 +242,12 @@ function bindStaticListeners() {
         const result = await syncBusyForUser(userId);
         await safeRefreshSchedulerData();
         showFlash(`Synced ${result.synced_interval_count} busy intervals for the visible week.`);
+        return;
+      }
+      if (userAction === "save-preference") {
+        const updatedUser = await savePreferredPracticeTime(userId);
+        showFlash(updatedUser?.preferred_practice_time_summary || "Practice preferences saved.");
+        return;
       }
     } catch (error) {
       showFlash(error.message, true);
@@ -258,7 +277,23 @@ function bindStaticListeners() {
     }
   });
 
-  calendar.addEventListener("click", (event) => {
+  danceModal.addEventListener("click", async (event) => {
+    const unscheduleButton = event.target.closest("[data-modal-unschedule-practice]");
+    if (!unscheduleButton) {
+      return;
+    }
+    try {
+      await unschedulePracticeFromModal(
+        unscheduleButton.dataset.modalUnschedulePractice,
+        unscheduleButton.dataset.danceId,
+        Number(unscheduleButton.dataset.sessionIndex),
+      );
+    } catch (error) {
+      showFlash(error.message, true);
+    }
+  });
+
+  calendar.addEventListener("click", async (event) => {
     if (state.justFinishedDrag) {
       state.justFinishedDrag = false;
       return;
@@ -392,6 +427,8 @@ async function requestPlanningRun(startIso, endIso) {
         .filter((participant) => participant.role === "optional")
         .map((participant) => participant.user_id),
       duration_minutes: dance.duration_minutes,
+      earliest_start_date: dance.earliest_start_date,
+      min_days_apart: dance.min_days_apart,
       required_session_count: dance.required_session_count,
       remaining_session_count: dance.remaining_session_count,
       latest_schedule_at: dance.latest_schedule_at,
@@ -444,6 +481,9 @@ function renderApp() {
   renderRightSidebar();
   renderCalendar();
   renderUsers();
+  if (!danceModal.classList.contains("hidden")) {
+    renderDancePracticesSection(getDanceById(state.editingDanceId));
+  }
 }
 
 function renderHeader() {
@@ -544,7 +584,7 @@ function renderPracticeRow(danceId, practice) {
         <span class="practice-row-status">
           ${
             isScheduled
-              ? `${formatShortDate(practice.session.start_at)} · ${formatTime(practice.session.start_at)}-${formatTime(practice.session.end_at)}`
+              ? formatDanceSessionSummary(danceId, practice.session.start_at, practice.session.end_at)
               : "Unscheduled"
           }
         </span>
@@ -649,7 +689,7 @@ function renderRightSidebar() {
   if (!suggestions.length) {
     suggestedSlots.innerHTML = renderEmptyState(
       "Suggested Slots",
-      "No suggested slots found. Try adjusting participant visibility or schedule manually.",
+      state.planningRun?.message || `No availability found between ${STRICT_PRACTICE_WINDOW_LABEL} for this practice.`,
     );
     selectedSlotSection.classList.add("hidden");
     return;
@@ -671,7 +711,7 @@ function renderSuggestionCard(suggestion) {
       <button type="button" data-select-suggestion="${escapeHtml(suggestion.id)}">
         <div class="slot-card-head">
           <div>
-            <strong>${escapeHtml(formatSlotTitle(display.start_at, display.end_at))}</strong>
+            <strong>${escapeHtml(formatSlotTitleForDance(suggestion.dance_event_id, display.start_at, display.end_at))}</strong>
             <div class="secondary-text compact-copy">Practice ${suggestion.session_index}</div>
           </div>
           <span class="score-pill">Score ${displayScore(suggestion)}</span>
@@ -845,7 +885,7 @@ function renderGhostBlock(segment, column, columnCount) {
       style="${blockPlacementStyle(placement, column, columnCount)}"
     >
       <div class="block-title">${escapeHtml(segment.dance_name)} · Practice ${segment.session_index}</div>
-      <div class="block-subtitle">${formatTime(segment.start_at)}-${formatTime(segment.end_at)}</div>
+      <div class="block-subtitle">${formatDanceTimeRange(segment.dance_event_id, segment.start_at, segment.end_at)}</div>
       <div class="block-subtitle">Suggested slot</div>
     </div>
   `;
@@ -868,7 +908,7 @@ function renderConfirmedBlock(segment, column, columnCount) {
       style="${blockPlacementStyle(placement, column, columnCount)}"
     >
       <div class="block-title">${escapeHtml(segment.dance_name)} · Practice ${segment.session_index}</div>
-      <div class="block-subtitle">${formatTime(segment.start_at)}-${formatTime(segment.end_at)}${escapeHtml(location)}</div>
+      <div class="block-subtitle">${formatDanceTimeRange(segment.dance_event_id, segment.start_at, segment.end_at)}${escapeHtml(location)}</div>
       <div class="block-subtitle">${state.confirmedEditMode ? "Confirmed · drag to preview" : "Confirmed practice"}</div>
     </div>
   `;
@@ -914,6 +954,9 @@ function renderSettingsUserCard(user) {
         <div class="participant-meta">
           <strong>${escapeHtml(user.display_name)}</strong>
           <span class="connection-summary">${escapeHtml(user.timezone)}${user.email ? ` · ${escapeHtml(user.email)}` : ""}</span>
+          <span class="connection-summary">${
+            escapeHtml(user.preferred_practice_time_summary || "No saved practice preference")
+          }</span>
         </div>
         <span class="status-badge ${connection.connected ? "status-completed" : "status-unscheduled"}">${escapeHtml(connection.status || "disconnected")}</span>
       </div>
@@ -922,6 +965,29 @@ function renderSettingsUserCard(user) {
         <button type="button" class="secondary-button" data-user-action="connect" data-user-id="${escapeHtml(user.id)}">Connect Google</button>
         <button type="button" class="secondary-button" data-user-action="refresh-calendars" data-user-id="${escapeHtml(user.id)}">Refresh calendars</button>
         <button type="button" class="secondary-button" data-user-action="sync-busy" data-user-id="${escapeHtml(user.id)}">Sync visible week</button>
+      </div>
+
+      <div class="select-grid">
+        <label class="full-span">
+          Practice preferences
+          <textarea
+            rows="3"
+            data-role="preferred-practice-time-raw"
+            data-user-id="${escapeHtml(user.id)}"
+            placeholder="I prefer weekends, never before 9am, avoid Fridays"
+          >${escapeHtml(user.preferred_practice_time_raw || "")}</textarea>
+        </label>
+        <button type="button" class="primary-button align-end settings-save-button" data-user-action="save-preference" data-user-id="${escapeHtml(user.id)}">Save preferences</button>
+      </div>
+
+      <div class="preference-preview">
+        <strong>AI summary</strong>
+        <div>
+          ${escapeHtml(
+            user.preferred_practice_time_summary ||
+              "Enter free-text practice preferences. We'll parse and cache them when you save.",
+          )}
+        </div>
       </div>
 
       ${
@@ -1057,6 +1123,42 @@ async function confirmSelectedSlot() {
   showFlash("Slot confirmed.");
 }
 
+async function unschedulePracticeFromModal(practiceId, danceId, sessionIndex) {
+  if (!practiceId) {
+    throw new Error("Practice not found.");
+  }
+  if (!window.confirm("Unschedule this practice? The Google Calendar event will also be deleted.")) {
+    return;
+  }
+
+  const response = await apiFetch(`/practices/${practiceId}/schedule`, {
+    method: "DELETE",
+  });
+
+  applyLocalUnschedule(danceId, practiceId, sessionIndex);
+  renderApp();
+  renderDancePracticesSection(getDanceById(danceId));
+
+  try {
+    await refreshSchedulerData();
+  } catch (error) {
+    showFlash(error.message, true);
+  }
+  if (!danceModal.classList.contains("hidden") && state.editingDanceId === danceId) {
+    renderDancePracticesSection(getDanceById(danceId));
+  }
+
+  if (response?.warning) {
+    showFlash(`Practice unscheduled in the app. Google Calendar warning: ${response.warning}`);
+    return;
+  }
+  if (response?.google_event_deleted === false) {
+    showFlash("Practice unscheduled.");
+    return;
+  }
+  showFlash("Practice unscheduled and removed from Google Calendar.");
+}
+
 function handleSlotEditorChange(event) {
   const field = event.target.dataset.slotField;
   const selectedSuggestion = getSelectedSuggestion();
@@ -1091,18 +1193,44 @@ async function createUser() {
     display_name: document.getElementById("display-name").value.trim(),
     email: document.getElementById("email").value.trim() || null,
     timezone: timezoneInput.value.trim(),
+    preferred_practice_time_raw: preferredPracticeTimeRawInput.value.trim() || null,
   };
 
-  await apiFetch("/users", {
+  const createdUser = await apiFetch("/users", {
     method: "POST",
     body: JSON.stringify(payload),
   });
 
+  setUserFormPreferencePreview(
+    createdUser.preferred_practice_time_summary ||
+      "Could not parse preferences — raw text saved, defaults will be used.",
+  );
   userForm.reset();
   timezoneInput.value = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  preferredPracticeTimeRawInput.value = "";
+  state.focusedSettingsUserId = createdUser.id;
   await refreshDashboard();
-  openSettingsModal({ focusForm: true });
-  showFlash("Participant created.");
+  openSettingsModal({ focusUserId: createdUser.id });
+  showFlash(createdUser.preferred_practice_time_summary || "Participant created.");
+}
+
+async function savePreferredPracticeTime(userId) {
+  const textarea = usersList.querySelector(`[data-role="preferred-practice-time-raw"][data-user-id="${userId}"]`);
+  if (!textarea) {
+    throw new Error("Practice preference control not found.");
+  }
+
+  const updatedUser = await apiFetch(`/users/${userId}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      preferred_practice_time_raw: textarea.value.trim() || null,
+    }),
+  });
+
+  state.focusedSettingsUserId = userId;
+  await refreshDashboard();
+  renderUsers();
+  return updatedUser;
 }
 
 function openSettingsModal({ focusUserId = null, focusForm = false } = {}) {
@@ -1118,6 +1246,12 @@ function openSettingsModal({ focusUserId = null, focusForm = false } = {}) {
   }
 }
 
+function setUserFormPreferencePreview(message) {
+  const normalized = (message || "").trim();
+  preferredPracticePreview.classList.toggle("hidden", !normalized);
+  preferredPracticePreviewText.textContent = normalized;
+}
+
 function openCreateDanceModal() {
   if (!state.users.length) {
     showFlash("Add participant before creating a dance.", true);
@@ -1128,7 +1262,10 @@ function openCreateDanceModal() {
   state.editingDanceId = null;
   addDanceForm.reset();
   setDefaultDanceDeadline();
+  setDefaultDanceEarliestStartDate();
+  document.getElementById("dance-min-days-apart").value = "0";
   renderDanceParticipantSelectors();
+  renderDancePracticesSection(null);
   hideInlineError(addDanceError);
   danceModalEyebrow.textContent = "Dance Setup";
   danceModalTitle.textContent = "Add dance";
@@ -1160,7 +1297,10 @@ function openEditDanceModal(danceId) {
   document.getElementById("dance-session-count").value = dance.required_session_count;
   document.getElementById("dance-duration-hours").value = `${dance.duration_minutes / 60}`;
   document.getElementById("dance-deadline").value = toDateInputValue(dance.latest_schedule_at);
+  document.getElementById("dance-earliest-start-date").value = dance.earliest_start_date || "";
+  document.getElementById("dance-min-days-apart").value = `${dance.min_days_apart || 0}`;
   document.getElementById("dance-description").value = dance.description || "";
+  renderDancePracticesSection(dance);
 
   settingsModal.classList.add("hidden");
   danceModal.classList.remove("hidden");
@@ -1174,6 +1314,7 @@ function closeModals() {
   state.focusedSettingsUserId = null;
   state.focusedSettingsForm = false;
   state.editingDanceId = null;
+  renderDancePracticesSection(null);
   hideInlineError(addDanceError);
 }
 
@@ -1207,6 +1348,8 @@ async function submitDanceForm() {
   const requiredSessionCount = Number(document.getElementById("dance-session-count").value);
   const durationHours = Number(document.getElementById("dance-duration-hours").value);
   const deadline = document.getElementById("dance-deadline").value;
+  const earliestStartDate = document.getElementById("dance-earliest-start-date").value;
+  const minDaysApart = Number(document.getElementById("dance-min-days-apart").value || 0);
   const description = document.getElementById("dance-description").value.trim();
 
   const participants = state.users
@@ -1228,6 +1371,9 @@ async function submitDanceForm() {
   if (!participants.some((participant) => participant.role === "required")) {
     throw new Error("At least one participant must be marked required.");
   }
+  if (!Number.isInteger(minDaysApart) || minDaysApart < 0) {
+    throw new Error("Minimum days apart must be zero or greater.");
+  }
 
   const existingDance = state.editingDanceId ? getDanceById(state.editingDanceId) : null;
   const payload = {
@@ -1235,6 +1381,8 @@ async function submitDanceForm() {
     description: description || null,
     organizer_user_id: existingDance?.organizer_user_id || state.users[0]?.id,
     duration_minutes: Math.round(durationHours * 60),
+    earliest_start_date: earliestStartDate || null,
+    min_days_apart: minDaysApart,
     latest_schedule_at: new Date(`${deadline}T23:59:59`).toISOString(),
     required_session_count: requiredSessionCount,
     participants,
@@ -1595,6 +1743,38 @@ function getLocationLabel(danceId, sessionIndex) {
   return state.sessionLocationOverrides[practiceKey(danceId, sessionIndex)] || DEFAULT_ROOM_LABEL;
 }
 
+function applyLocalUnschedule(danceId, practiceId, sessionIndex) {
+  delete state.confirmedSessionDrafts[practiceId];
+  if (danceId && sessionIndex) {
+    delete state.sessionLocationOverrides[practiceKey(danceId, sessionIndex)];
+  }
+
+  state.calendarOverview.practice_sessions = (state.calendarOverview.practice_sessions || []).filter(
+    (session) => session.id !== practiceId,
+  );
+  if (state.eventSessions[danceId]) {
+    state.eventSessions[danceId] = state.eventSessions[danceId].filter((session) => session.id !== practiceId);
+  }
+
+  const dance = getDanceById(danceId);
+  if (dance) {
+    dance.confirmed_session_count = Math.max(0, (dance.confirmed_session_count || 0) - 1);
+    dance.remaining_session_count = Math.min(
+      dance.required_session_count,
+      (dance.remaining_session_count || 0) + 1,
+    );
+    if (!["archived", "completed"].includes(dance.status)) {
+      dance.status = deriveDanceStatus(dance);
+    }
+  }
+
+  if (state.selectedDanceId === danceId) {
+    state.activePracticeKey = practiceKey(danceId, sessionIndex);
+    state.selectedSuggestionId = null;
+    state.planningRun = null;
+  }
+}
+
 function getAvailableParticipantNames(recommendation) {
   const available = recommendation.participant_statuses
     .filter((item) => item.available)
@@ -1632,7 +1812,7 @@ function getReasonText(recommendation) {
   return (
     recommendation.explanation?.summary ||
     recommendation.explanation?.reasons?.[0]?.message ||
-    "Fits all participants, avoids late-night hours."
+    `Fits all participants inside the ${STRICT_PRACTICE_WINDOW_LABEL} practice window.`
   );
 }
 
@@ -1643,6 +1823,47 @@ function displayScore(recommendation) {
 
 function getUserById(userId) {
   return state.users.find((user) => user.id === userId) || null;
+}
+
+function getDanceTimezone(danceId) {
+  const dance = getDanceById(danceId);
+  return getUserById(dance?.organizer_user_id)?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+function formatInTimezone(value, timezone, options) {
+  return new Intl.DateTimeFormat(undefined, { timeZone: timezone, ...options }).format(new Date(value));
+}
+
+function formatShortDateForDance(danceId, value) {
+  return formatInTimezone(value, getDanceTimezone(danceId), {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function formatTimeForDance(danceId, value) {
+  return formatInTimezone(value, getDanceTimezone(danceId), {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function formatDanceTimeRange(danceId, startAt, endAt) {
+  return `${formatTimeForDance(danceId, startAt)}-${formatTimeForDance(danceId, endAt)}`;
+}
+
+function formatDanceSessionSummary(danceId, startAt, endAt) {
+  return `${formatShortDateForDance(danceId, startAt)} · ${formatDanceTimeRange(danceId, startAt, endAt)}`;
+}
+
+function formatSlotTitleForDance(danceId, startAt, endAt) {
+  const timezone = getDanceTimezone(danceId);
+  const dayText = formatInTimezone(startAt, timezone, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+  return `${dayText} · ${formatDanceTimeRange(danceId, startAt, endAt)}`;
 }
 
 function getParticipantColorByUserId(userId) {
@@ -1675,6 +1896,7 @@ function expandConfirmedSegments(sessions, weekDays) {
   return sessions.flatMap((session) => splitAcrossWeek(session, weekDays, (segment) => ({
     ...segment,
     id: session.id,
+    dance_event_id: session.dance_event_id,
     dance_name: session.dance_name,
     session_index: session.session_index,
     location: session.location,
@@ -1939,6 +2161,55 @@ function apiFetch(path, options = {}) {
 function setDefaultDanceDeadline() {
   const defaultDate = addDays(new Date(), 14);
   document.getElementById("dance-deadline").value = toDateInputValue(defaultDate);
+}
+
+function setDefaultDanceEarliestStartDate() {
+  document.getElementById("dance-earliest-start-date").value = toDateInputValue(new Date());
+}
+
+function renderDancePracticesSection(dance) {
+  if (!dance) {
+    dancePracticesSection.classList.add("hidden");
+    dancePracticesList.innerHTML = "";
+    return;
+  }
+
+  const practices = getPracticeRows(dance.id);
+  dancePracticesSection.classList.remove("hidden");
+  dancePracticesList.innerHTML = practices
+    .map((practice) => renderDancePracticeManagerRow(dance.id, practice))
+    .join("");
+}
+
+function renderDancePracticeManagerRow(danceId, practice) {
+  const isScheduled = practice.status === "scheduled";
+  return `
+    <div class="practice-manage-row">
+      <div class="practice-manage-meta">
+        <strong>Practice ${practice.sessionIndex}</strong>
+        <span class="practice-row-status">
+          ${isScheduled ? formatDanceSessionSummary(danceId, practice.session.start_at, practice.session.end_at) : "Unscheduled"}
+        </span>
+      </div>
+      <div class="practice-manage-actions">
+        ${
+          isScheduled
+            ? `
+              <button
+                type="button"
+                class="secondary-button"
+                data-modal-unschedule-practice="${escapeHtml(practice.session.id)}"
+                data-dance-id="${escapeHtml(danceId)}"
+                data-session-index="${escapeHtml(String(practice.sessionIndex))}"
+              >
+                Unschedule
+              </button>
+            `
+            : '<span class="status-badge status-unscheduled">Unscheduled</span>'
+        }
+      </div>
+    </div>
+  `;
 }
 
 function formatWeekLabel(weekStart) {

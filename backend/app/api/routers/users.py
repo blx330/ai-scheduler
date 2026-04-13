@@ -3,17 +3,22 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
-from app.api.schemas.users import UserCreate, UserRead
+from app.api.deps import get_db, get_user_profile_preference_parser
+from app.api.schemas.users import UserCreate, UserRead, UserUpdate
 from app.application.services.user_service import UserService
+from app.infrastructure.integrations.llm.profile_preference_parser import UserProfilePreferenceParser
 
 router = APIRouter(prefix="/users", tags=["users"])
 
 
 @router.post("", response_model=UserRead, status_code=status.HTTP_201_CREATED)
-def create_user(payload: UserCreate, db: Session = Depends(get_db)) -> UserRead:
+def create_user(
+    payload: UserCreate,
+    db: Session = Depends(get_db),
+    preference_parser: UserProfilePreferenceParser = Depends(get_user_profile_preference_parser),
+) -> UserRead:
     try:
-        user = UserService(db).create_user(payload)
+        user = UserService(db).create_user(payload, preference_parser=preference_parser)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return UserRead.model_validate(user)
@@ -28,6 +33,22 @@ def list_users(db: Session = Depends(get_db)) -> list[UserRead]:
 @router.get("/{user_id}", response_model=UserRead)
 def get_user(user_id: UUID, db: Session = Depends(get_db)) -> UserRead:
     user = UserService(db).get_user(user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return UserRead.model_validate(user)
+
+
+@router.patch("/{user_id}", response_model=UserRead)
+def update_user(
+    user_id: UUID,
+    payload: UserUpdate,
+    db: Session = Depends(get_db),
+    preference_parser: UserProfilePreferenceParser = Depends(get_user_profile_preference_parser),
+) -> UserRead:
+    try:
+        user = UserService(db).update_user(user_id, payload, preference_parser=preference_parser)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     return UserRead.model_validate(user)

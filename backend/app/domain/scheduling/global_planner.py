@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 import logging
 from typing import Any
 from uuid import UUID
@@ -10,15 +10,18 @@ from zoneinfo import ZoneInfo
 from app.domain.availability.interval_ops import subtract_intervals
 from app.domain.availability.models import Interval
 from app.domain.common.datetime_utils import ensure_utc
+from app.domain.preferences.models import ParsedPreference
 from app.domain.scheduling.candidate_generation import generate_candidate_starts
 from app.domain.scheduling.models import ParticipantContext, ScheduleParticipantStatus, ScheduleSlot
-from app.domain.scheduling.scoring import score_slot
+from app.domain.scheduling.scoring import preference_bonus_for_user, score_slot
 
 LATE_NIGHT_PENALTY = -1.0
 SAME_DAY_PRACTICE_PENALTY = -0.35
 BACK_TO_BACK_PENALTY = -0.5
 FALLBACK_MISSING_REQUIRED_PENALTY = -2.5
 BACK_TO_BACK_WINDOW = timedelta(minutes=15)
+PRACTICE_WINDOW_START_LOCAL = time(8, 0)
+PRACTICE_WINDOW_END_LOCAL = time(12, 0)
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +30,16 @@ logger = logging.getLogger(__name__)
 class PlanningEventInput:
     dance_event_id: UUID
     dance_name: str
+    organizer_user_id: UUID
     organizer_timezone: str
+    organizer_preference: ParsedPreference | None
     duration_minutes: int
+    earliest_start_date: date | None
+    min_days_apart: int
     latest_schedule_at: datetime
     next_session_index: int
     sessions_remaining: int
+    confirmed_session_starts: list[datetime]
     participants: list[ParticipantContext]
 
     @property
@@ -50,6 +58,8 @@ class SessionReservation:
     end_at: datetime
     room_id: UUID
     participant_user_ids: frozenset[UUID]
+    dance_event_id: UUID | None = None
+    session_index: int | None = None
 
 
 @dataclass
@@ -75,6 +85,23 @@ class PlanningRecommendation:
             status.user_id
             for status in self.participant_statuses
             if status.role == "required" and status.available
+        )
+
+
+@dataclass(frozen=True)
+class CandidateOption:
+    slot: ScheduleSlot
+    base_score_breakdown: dict[str, float]
+    optional_available_count: int
+    participant_statuses: list[ScheduleParticipantStatus]
+    missing_required_user_ids: list[UUID]
+
+    @property
+    def reserved_required_user_ids(self) -> frozenset[UUID]:
+        return frozenset(
+            status.user_id
+            for status in self.participant_statuses
+            if status.role == "required" and status.available and status.user_id not in self.missing_required_user_ids
         )
 
 
@@ -149,6 +176,8 @@ def plan_practice_sessions(
                         end_at=recommendations[0].end_at,
                         room_id=room_id,
                         participant_user_ids=recommendations[0].reserved_required_user_ids,
+                        dance_event_id=event.dance_event_id,
+                        session_index=session_index,
                     )
                 )
 
@@ -212,7 +241,7 @@ def build_ranked_recommendations(
 
     ranked = sorted(
         candidates,
-        key=lambda item: (-item.total_score, -item.optional_available_count, item.start_at),
+        key=lambda item: (item.start_at, -item.total_score, -item.optional_available_count),
     )[:max_results]
     for index, item in enumerate(ranked, start=1):
         item.rank = index
@@ -229,51 +258,155 @@ def _build_candidates(
     slot_step_minutes: int,
     allowed_missing_required: int,
 ) -> list[PlanningRecommendation]:
-    horizon_end = min(ensure_utc(planning_horizon_end), ensure_utc(event.latest_schedule_at))
-    if horizon_end <= ensure_utc(planning_horizon_start):
-        logger.info(
-            "planning candidates skipped event=%s session_index=%s reason=empty_horizon horizon_start=%s horizon_end=%s latest_schedule_at=%s",
-            event.dance_event_id,
-            session_index,
-            ensure_utc(planning_horizon_start),
-            horizon_end,
-            ensure_utc(event.latest_schedule_at),
+    candidate_options, candidate_starts_count, rejection_counts = _build_candidate_options(
+        event=event,
+        session_index=session_index,
+        reservations=reservations,
+        room_id=room_id,
+        planning_horizon_start=planning_horizon_start,
+        planning_horizon_end=planning_horizon_end,
+        slot_step_minutes=slot_step_minutes,
+        allowed_missing_required=allowed_missing_required,
+    )
+    recommendations: list[PlanningRecommendation] = []
+    rejection_counts["no_valid_remaining_sequence"] = 0
+    for option in candidate_options:
+        if _remaining_session_count(event, session_index) > 0:
+            future_reservations = [
+                *reservations,
+                _build_session_reservation(
+                    event=event,
+                    session_index=session_index,
+                    slot=option.slot,
+                    room_id=room_id,
+                    participant_user_ids=option.reserved_required_user_ids,
+                ),
+            ]
+            if not _can_complete_remaining_sessions(
+                event=event,
+                next_session_index=session_index + 1,
+                reservations=future_reservations,
+                room_id=room_id,
+                planning_horizon_start=planning_horizon_start,
+                planning_horizon_end=planning_horizon_end,
+                slot_step_minutes=slot_step_minutes,
+            ):
+                rejection_counts["no_valid_remaining_sequence"] += 1
+                continue
+        score_breakdown, explanation = _build_scoring_metadata(
+            slot=option.slot,
+            event=event,
+            reservations=reservations,
+            base_score_breakdown=option.base_score_breakdown,
+            optional_available_count=option.optional_available_count,
+            missing_required_user_ids=option.missing_required_user_ids,
         )
-        return []
-
-    participant_adjustments = _participant_reservation_intervals(event.participants, reservations)
-    adjusted_participants: list[ParticipantContext] = []
-    for participant in event.participants:
-        reservation_busy = participant_adjustments.get(participant.user_id, [])
-        adjusted_availability = subtract_intervals(participant.effective_availability, reservation_busy)
-        adjusted_participants.append(
-            ParticipantContext(
-                user_id=participant.user_id,
-                role=participant.role,
-                timezone=participant.timezone,
-                effective_availability=adjusted_availability,
-                preference=participant.preference,
+        total_score = round(sum(score_breakdown.values()), 2)
+        recommendations.append(
+            PlanningRecommendation(
+                dance_event_id=event.dance_event_id,
+                dance_name=event.dance_name,
+                session_index=session_index,
+                rank=0,
+                room_id=room_id,
+                start_at=option.slot.start_at,
+                end_at=option.slot.end_at,
+                total_score=total_score,
+                score_breakdown=score_breakdown,
+                explanation=explanation,
+                is_fallback=bool(option.missing_required_user_ids),
+                missing_required_user_ids=option.missing_required_user_ids,
+                optional_available_count=option.optional_available_count,
+                participant_statuses=option.participant_statuses,
             )
         )
+    logger.info(
+        "planning candidates event=%s session_index=%s allowed_missing_required=%s generated_slots=%s accepted=%s rejections=%s horizon_start=%s horizon_end=%s duration_minutes=%s",
+        event.dance_event_id,
+        session_index,
+        allowed_missing_required,
+        candidate_starts_count,
+        len(recommendations),
+        rejection_counts,
+        ensure_utc(planning_horizon_start),
+        min(ensure_utc(planning_horizon_end), ensure_utc(event.latest_schedule_at)),
+        event.duration_minutes,
+    )
+    return recommendations
 
+
+def _build_candidate_options(
+    event: PlanningEventInput,
+    session_index: int,
+    reservations: list[SessionReservation],
+    room_id: UUID,
+    planning_horizon_start: datetime,
+    planning_horizon_end: datetime,
+    slot_step_minutes: int,
+    allowed_missing_required: int,
+) -> tuple[list[CandidateOption], int, dict[str, int]]:
+    prior_session_end, later_session_start = _same_dance_session_bounds(
+        event=event,
+        session_index=session_index,
+        reservations=reservations,
+    )
+    effective_horizon_start = _candidate_horizon_start(event, planning_horizon_start)
+    if prior_session_end is not None:
+        effective_horizon_start = max(effective_horizon_start, ensure_utc(prior_session_end))
+    horizon_end = min(ensure_utc(planning_horizon_end), ensure_utc(event.latest_schedule_at))
+    if later_session_start is not None:
+        horizon_end = min(horizon_end, ensure_utc(later_session_start))
+    if horizon_end <= effective_horizon_start:
+        return [], 0, {"empty_horizon": 1}
+
+    adjusted_participants = _adjust_participants_for_reservations(event.participants, reservations)
     candidate_starts = generate_candidate_starts(
-        horizon_start=planning_horizon_start,
+        horizon_start=effective_horizon_start,
         horizon_end=horizon_end,
         duration_minutes=event.duration_minutes,
         slot_step_minutes=slot_step_minutes,
         organizer_timezone=event.organizer_timezone,
-        daily_window_start_local=None,
-        daily_window_end_local=None,
+        daily_window_start_local=PRACTICE_WINDOW_START_LOCAL,
+        daily_window_end_local=PRACTICE_WINDOW_END_LOCAL,
     )
 
-    recommendations: list[PlanningRecommendation] = []
+    organizer_zone = ZoneInfo(event.organizer_timezone)
+    same_dance_dates = {
+        ensure_utc(start_at).astimezone(organizer_zone).date()
+        for start_at in event.confirmed_session_starts
+    }
+    same_dance_dates.update(
+        ensure_utc(reservation.start_at).astimezone(organizer_zone).date()
+        for reservation in reservations
+        if reservation.dance_event_id == event.dance_event_id
+    )
     rejection_counts = {
         "room_conflict": 0,
+        "earliest_start_date": 0,
+        "min_days_apart": 0,
+        "before_prior_session": 0,
+        "after_later_session": 0,
         "missing_required_over_limit": 0,
         "fallback_wrong_missing_required_count": 0,
     }
+    options: list[CandidateOption] = []
     for start_at in candidate_starts:
         slot = ScheduleSlot.from_start(start_at=start_at, duration_minutes=event.duration_minutes)
+        if prior_session_end is not None and slot.start_at < ensure_utc(prior_session_end):
+            rejection_counts["before_prior_session"] += 1
+            continue
+        if later_session_start is not None and slot.end_at > ensure_utc(later_session_start):
+            rejection_counts["after_later_session"] += 1
+            continue
+        slot_local_date = slot.start_at.astimezone(organizer_zone).date()
+        if event.earliest_start_date is not None and slot_local_date < event.earliest_start_date:
+            rejection_counts["earliest_start_date"] += 1
+            continue
+        if event.min_days_apart > 0 and any(
+            abs((slot_local_date - other_date).days) < event.min_days_apart for other_date in same_dance_dates
+        ):
+            rejection_counts["min_days_apart"] += 1
+            continue
         if _room_conflict(slot, room_id, reservations):
             rejection_counts["room_conflict"] += 1
             continue
@@ -290,47 +423,150 @@ def _build_candidates(
         if allowed_missing_required == 1 and len(missing_required_user_ids) != 1:
             rejection_counts["fallback_wrong_missing_required_count"] += 1
             continue
-
-        score_breakdown, explanation = _build_scoring_metadata(
-            slot=slot,
-            event=event,
-            reservations=reservations,
-            base_score_breakdown=base_result.score_breakdown,
-            optional_available_count=base_result.optional_available_count,
-            missing_required_user_ids=missing_required_user_ids,
-        )
-        total_score = round(sum(score_breakdown.values()), 2)
-        recommendations.append(
-            PlanningRecommendation(
-                dance_event_id=event.dance_event_id,
-                dance_name=event.dance_name,
-                session_index=session_index,
-                rank=0,
-                room_id=room_id,
-                start_at=slot.start_at,
-                end_at=slot.end_at,
-                total_score=total_score,
-                score_breakdown=score_breakdown,
-                explanation=explanation,
-                is_fallback=bool(missing_required_user_ids),
-                missing_required_user_ids=missing_required_user_ids,
+        options.append(
+            CandidateOption(
+                slot=slot,
+                base_score_breakdown=base_result.score_breakdown,
                 optional_available_count=base_result.optional_available_count,
                 participant_statuses=base_result.participant_statuses,
+                missing_required_user_ids=missing_required_user_ids,
             )
         )
-    logger.info(
-        "planning candidates event=%s session_index=%s allowed_missing_required=%s generated_slots=%s accepted=%s rejections=%s horizon_start=%s horizon_end=%s duration_minutes=%s",
-        event.dance_event_id,
-        session_index,
-        allowed_missing_required,
-        len(candidate_starts),
-        len(recommendations),
-        rejection_counts,
-        ensure_utc(planning_horizon_start),
-        horizon_end,
-        event.duration_minutes,
+    return options, len(candidate_starts), rejection_counts
+
+
+def _can_complete_remaining_sessions(
+    event: PlanningEventInput,
+    next_session_index: int,
+    reservations: list[SessionReservation],
+    room_id: UUID,
+    planning_horizon_start: datetime,
+    planning_horizon_end: datetime,
+    slot_step_minutes: int,
+) -> bool:
+    if next_session_index > event.next_session_index + event.sessions_remaining - 1:
+        return True
+
+    primary_options, _, _ = _build_candidate_options(
+        event=event,
+        session_index=next_session_index,
+        reservations=reservations,
+        room_id=room_id,
+        planning_horizon_start=planning_horizon_start,
+        planning_horizon_end=planning_horizon_end,
+        slot_step_minutes=slot_step_minutes,
+        allowed_missing_required=0,
     )
-    return recommendations
+    candidate_options = primary_options
+    if not candidate_options:
+        candidate_options, _, _ = _build_candidate_options(
+            event=event,
+            session_index=next_session_index,
+            reservations=reservations,
+            room_id=room_id,
+            planning_horizon_start=planning_horizon_start,
+            planning_horizon_end=planning_horizon_end,
+            slot_step_minutes=slot_step_minutes,
+            allowed_missing_required=1,
+        )
+
+    for option in candidate_options:
+        future_reservations = [
+            *reservations,
+            _build_session_reservation(
+                event=event,
+                session_index=next_session_index,
+                slot=option.slot,
+                room_id=room_id,
+                participant_user_ids=option.reserved_required_user_ids,
+            ),
+        ]
+        if _can_complete_remaining_sessions(
+            event=event,
+            next_session_index=next_session_index + 1,
+            reservations=future_reservations,
+            room_id=room_id,
+            planning_horizon_start=planning_horizon_start,
+            planning_horizon_end=planning_horizon_end,
+            slot_step_minutes=slot_step_minutes,
+        ):
+            return True
+    return False
+
+
+def _candidate_horizon_start(event: PlanningEventInput, planning_horizon_start: datetime) -> datetime:
+    effective_horizon_start = ensure_utc(planning_horizon_start)
+    if event.earliest_start_date is None:
+        return effective_horizon_start
+    organizer_zone = ZoneInfo(event.organizer_timezone)
+    local_earliest_start = datetime.combine(
+        event.earliest_start_date,
+        PRACTICE_WINDOW_START_LOCAL,
+        tzinfo=organizer_zone,
+    )
+    return max(effective_horizon_start, ensure_utc(local_earliest_start.astimezone(timezone.utc)))
+
+
+def _same_dance_session_bounds(
+    event: PlanningEventInput,
+    session_index: int,
+    reservations: list[SessionReservation],
+) -> tuple[datetime | None, datetime | None]:
+    prior_session_end: datetime | None = None
+    later_session_start: datetime | None = None
+    for reservation in reservations:
+        if reservation.dance_event_id != event.dance_event_id or reservation.session_index is None:
+            continue
+        if reservation.session_index < session_index:
+            if prior_session_end is None or ensure_utc(reservation.end_at) > ensure_utc(prior_session_end):
+                prior_session_end = ensure_utc(reservation.end_at)
+        elif reservation.session_index > session_index:
+            if later_session_start is None or ensure_utc(reservation.start_at) < ensure_utc(later_session_start):
+                later_session_start = ensure_utc(reservation.start_at)
+    return prior_session_end, later_session_start
+
+
+def _adjust_participants_for_reservations(
+    participants: list[ParticipantContext],
+    reservations: list[SessionReservation],
+) -> list[ParticipantContext]:
+    participant_adjustments = _participant_reservation_intervals(participants, reservations)
+    adjusted_participants: list[ParticipantContext] = []
+    for participant in participants:
+        reservation_busy = participant_adjustments.get(participant.user_id, [])
+        adjusted_availability = subtract_intervals(participant.effective_availability, reservation_busy)
+        adjusted_participants.append(
+            ParticipantContext(
+                user_id=participant.user_id,
+                role=participant.role,
+                timezone=participant.timezone,
+                effective_availability=adjusted_availability,
+                preference=participant.preference,
+            )
+        )
+    return adjusted_participants
+
+
+def _build_session_reservation(
+    event: PlanningEventInput,
+    session_index: int,
+    slot: ScheduleSlot,
+    room_id: UUID,
+    participant_user_ids: frozenset[UUID],
+) -> SessionReservation:
+    return SessionReservation(
+        identifier=f"{event.dance_event_id}:{session_index}",
+        start_at=slot.start_at,
+        end_at=slot.end_at,
+        room_id=room_id,
+        participant_user_ids=participant_user_ids,
+        dance_event_id=event.dance_event_id,
+        session_index=session_index,
+    )
+
+
+def _remaining_session_count(event: PlanningEventInput, session_index: int) -> int:
+    return max((event.next_session_index + event.sessions_remaining - 1) - session_index, 0)
 
 
 def _participant_reservation_intervals(
@@ -369,6 +605,10 @@ def _build_scoring_metadata(
         if reservation.participant_user_ids & event.required_participant_ids
     ]
 
+    participant_ids = {participant.user_id for participant in event.participants}
+    organizer_preference_bonus = 0.0
+    if event.organizer_preference is not None and event.organizer_user_id not in participant_ids:
+        organizer_preference_bonus, _ = preference_bonus_for_user(slot, event.organizer_preference, event.organizer_timezone)
     late_night_penalty = _late_night_penalty(slot, organizer_zone)
     same_day_count = _same_day_reservation_count(slot, relevant_reservations, organizer_zone)
     same_day_penalty = round(same_day_count * SAME_DAY_PRACTICE_PENALTY, 2)
@@ -379,6 +619,7 @@ def _build_scoring_metadata(
     score_breakdown = {
         "optional_attendees": round(float(base_score_breakdown.get("optional_attendees", 0.0)), 2),
         "preference_bonus": round(float(base_score_breakdown.get("preference_bonus", 0.0)), 2),
+        "organizer_preference_bonus": round(organizer_preference_bonus, 2),
         "late_night_penalty": round(late_night_penalty, 2),
         "same_day_penalty": same_day_penalty,
         "back_to_back_penalty": back_to_back_penalty,
@@ -419,6 +660,14 @@ def _build_scoring_metadata(
                 "score": round(score_breakdown["preference_bonus"], 2),
             }
         )
+    if score_breakdown["organizer_preference_bonus"]:
+        reasons.append(
+            {
+                "code": "organizer_preference_bonus",
+                "message": "This slot matches the organizer's saved practice-time preference.",
+                "score": round(score_breakdown["organizer_preference_bonus"], 2),
+            }
+        )
     if late_night_penalty:
         reasons.append(
             {
@@ -444,7 +693,11 @@ def _build_scoring_metadata(
             }
         )
 
-    summary = "Fallback option with one missing required participant." if missing_required_user_ids else "Recommended practice with all required participants available."
+    summary = (
+        "Fallback option within the 8:00 AM to 12:00 PM practice window with one missing required participant."
+        if missing_required_user_ids
+        else "Recommended practice within the 8:00 AM to 12:00 PM window with all required participants available."
+    )
     explanation = {
         "summary": summary,
         "reasons": reasons,

@@ -175,6 +175,18 @@
           Timezone
           <input id="timezone" required type="text" placeholder="America/New_York" />
         </label>
+        <label>
+          Practice preferences
+          <textarea
+            id="preferred-practice-time-raw"
+            rows="3"
+            placeholder="I prefer weekends, never before 9am, avoid Fridays"
+          ></textarea>
+        </label>
+        <div id="preferred-practice-preview" class="preference-preview full-span hidden">
+          <strong>AI summary</strong>
+          <div id="preferred-practice-preview-text"></div>
+        </div>
         <button id="submit-user" type="submit" class="primary-button align-end">Add participant</button>
       </form>
 
@@ -210,10 +222,28 @@
           Deadline
           <input id="dance-deadline" required type="date" />
         </label>
+        <label>
+          Earliest start date
+          <input id="dance-earliest-start-date" type="date" />
+        </label>
+        <label>
+          Minimum days apart
+          <input id="dance-min-days-apart" min="0" step="1" type="number" value="0" />
+        </label>
         <label class="full-span">
           Notes
           <textarea id="dance-description" rows="3" placeholder="Optional rehearsal context"></textarea>
         </label>
+
+        <div id="dance-practices-section" class="full-span hidden">
+          <div class="section-heading tight">
+            <div>
+              <h2>Practices</h2>
+              <p class="secondary-text">Review each practice and unschedule confirmed ones individually.</p>
+            </div>
+          </div>
+          <div id="dance-practices-list" class="modal-practice-list"></div>
+        </div>
 
         <div class="full-span">
           <div class="section-heading tight">

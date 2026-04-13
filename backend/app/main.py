@@ -9,17 +9,19 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
-from app.api.routers import availability, events, google_calendar, health, planning, preferences, schedule_requests, users
+from app.api.routers import availability, events, google_calendar, health, planning, practices, preferences, schedule_requests, users
 from app.infrastructure.config import Settings
 from app.infrastructure.db.session import build_session_factory
 from app.infrastructure.integrations.google_calendar.client import build_google_calendar_client
 from app.infrastructure.integrations.llm.parser import build_preference_parser
+from app.infrastructure.integrations.llm.profile_preference_parser import build_user_profile_preference_parser
 
 
 def create_app(
     settings: Optional[Settings] = None,
     session_factory=None,
     preference_parser=None,
+    user_profile_preference_parser=None,
     google_calendar_client=None,
 ) -> FastAPI:
     app_settings = settings or Settings()
@@ -36,6 +38,9 @@ def create_app(
     app.state.preference_parser = preference_parser or build_preference_parser(
         app_settings.parser_mode,
         api_key=app_settings.groq_api_key or app_settings.feather_api_key,
+    )
+    app.state.user_profile_preference_parser = user_profile_preference_parser or build_user_profile_preference_parser(
+        api_key=app_settings.groq_api_key,
     )
     app.state.google_calendar_client = google_calendar_client or build_google_calendar_client(
         client_id=app_settings.google_client_id,
@@ -65,6 +70,7 @@ def create_app(
     app.include_router(preferences.router, prefix=app_settings.api_prefix)
     app.include_router(events.router, prefix=app_settings.api_prefix)
     app.include_router(planning.router, prefix=app_settings.api_prefix)
+    app.include_router(practices.router, prefix=app_settings.api_prefix)
     app.include_router(schedule_requests.router, prefix=app_settings.api_prefix)
     app.include_router(google_calendar.router, prefix=app_settings.api_prefix)
 

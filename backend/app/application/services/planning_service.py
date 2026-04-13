@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import date
 import logging
 from types import SimpleNamespace
 from typing import Optional
@@ -12,7 +13,11 @@ from sqlalchemy.orm import Session, selectinload
 from app.api.schemas.planning import PlanningRunCreate
 from app.domain.availability.interval_ops import build_effective_availability
 from app.domain.common.datetime_utils import ensure_utc
-from app.domain.preferences.models import ParsedPreference
+from app.domain.preferences.models import (
+    ParsedPreference,
+    merge_cached_practice_preference,
+    merge_preferred_practice_time,
+)
 from app.domain.scheduling.global_planner import (
     PlanningEventInput,
     SessionReservation,
@@ -30,6 +35,7 @@ from app.infrastructure.db.models import (
     User,
     UserParsedPreference,
 )
+from app.application.services.google_calendar_service import GoogleCalendarService
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +109,12 @@ class PlanningService:
         )
         return self.db.scalars(statement).one_or_none()
 
-    def confirm_results(self, run_id: UUID, result_ids: list[UUID]) -> tuple[PlanningRun, list[PracticeSession]]:
+    def confirm_results(
+        self,
+        run_id: UUID,
+        result_ids: list[UUID],
+        google_calendar_service: GoogleCalendarService | None = None,
+    ) -> tuple[PlanningRun, list[PracticeSession]]:
         run = self.get_planning_run(run_id)
         if run is None:
             raise ValueError("Planning run not found")
@@ -113,7 +124,11 @@ class PlanningService:
                 select(PlanningRunResult)
                 .where(PlanningRunResult.planning_run_id == run_id)
                 .where(PlanningRunResult.id.in_(result_ids))
-                .options(selectinload(PlanningRunResult.dance_event).selectinload(DanceEvent.participants))
+                .options(
+                    selectinload(PlanningRunResult.dance_event).selectinload(DanceEvent.participants),
+                    selectinload(PlanningRunResult.dance_event).selectinload(DanceEvent.practice_sessions),
+                    selectinload(PlanningRunResult.dance_event).selectinload(DanceEvent.organizer),
+                )
             )
         )
         if len(results) != len(result_ids):
@@ -140,8 +155,14 @@ class PlanningService:
         )
 
         confirmed_sessions: list[PracticeSession] = []
+        confirmed_session_ids: list[UUID] = []
+        selected_starts_by_event: dict[UUID, list[date]] = defaultdict(list)
         ordered_results = sorted(results, key=lambda item: (item.start_at, item.dance_event_id, item.session_index))
         for result in ordered_results:
+            _validate_result_against_event_constraints(
+                result=result,
+                selected_starts=selected_starts_by_event[result.dance_event_id],
+            )
             required_attendees = frozenset(_required_attendee_ids(result))
             if any(
                 reservation.room_id == result.room_id
@@ -182,7 +203,12 @@ class PlanningService:
                 explanation_json=dict(result.explanation_json or {}),
             )
             self.db.add(practice_session)
+            self.db.flush()
             confirmed_sessions.append(practice_session)
+            confirmed_session_ids.append(practice_session.id)
+            selected_starts_by_event[result.dance_event_id].append(
+                ensure_utc(result.start_at).astimezone(_organizer_zone_for_result(result)).date()
+            )
             active_reservations.append(
                 SessionReservation(
                     identifier=f"{result.dance_event_id}:{result.session_index}",
@@ -190,6 +216,8 @@ class PlanningService:
                     end_at=result.end_at,
                     room_id=result.room_id,
                     participant_user_ids=required_attendees,
+                    dance_event_id=result.dance_event_id,
+                    session_index=result.session_index,
                 )
             )
 
@@ -205,8 +233,55 @@ class PlanningService:
             self.db.add(event)
 
         self.db.commit()
+        if google_calendar_service is not None:
+            for practice_session_id in confirmed_session_ids:
+                try:
+                    google_calendar_service.create_event_for_practice_session(practice_session_id)
+                except (ValueError, RuntimeError) as exc:
+                    logger.warning(
+                        "Failed to create Google Calendar event for practice session %s: %s",
+                        practice_session_id,
+                        exc,
+                    )
+        confirmed_sessions = list(
+            self.db.scalars(
+                select(PracticeSession)
+                .where(PracticeSession.id.in_(confirmed_session_ids))
+                .order_by(PracticeSession.dance_event_id.asc(), PracticeSession.session_index.asc())
+            )
+        )
         run = self.get_planning_run(run_id)
         return run, sorted(confirmed_sessions, key=lambda item: (item.dance_event_id, item.session_index))
+
+    def get_practice_session(self, practice_session_id: UUID) -> Optional[PracticeSession]:
+        statement = (
+            select(PracticeSession)
+            .where(PracticeSession.id == practice_session_id)
+            .options(
+                selectinload(PracticeSession.dance_event).selectinload(DanceEvent.organizer),
+                selectinload(PracticeSession.dance_event).selectinload(DanceEvent.practice_sessions),
+            )
+        )
+        return self.db.scalars(statement).one_or_none()
+
+    def unschedule_practice_session(self, practice_session_id: UUID) -> Optional[PracticeSession]:
+        session = self.get_practice_session(practice_session_id)
+        if session is None:
+            return None
+
+        event = session.dance_event
+        self.db.delete(session)
+        self.db.flush()
+
+        remaining_confirmed = self.db.scalars(
+            select(PracticeSession.id)
+            .where(PracticeSession.dance_event_id == event.id)
+            .where(PracticeSession.status == "confirmed")
+        ).all()
+        if event.status not in {"archived", "completed"}:
+            event.status = _derive_event_status(event.required_session_count, len(remaining_confirmed))
+        self.db.commit()
+        return session
 
     def get_calendar_overview(self, horizon_start, horizon_end) -> tuple[list[CalendarBusyInterval], list[PracticeSession]]:
         start_at = ensure_utc(horizon_start)
@@ -297,7 +372,7 @@ class PlanningService:
         preference_rows = list(
             self.db.scalars(
                 select(UserParsedPreference)
-                .where(UserParsedPreference.user_id.in_(participant_user_ids))
+                .where(UserParsedPreference.user_id.in_(all_user_ids))
                 .order_by(UserParsedPreference.created_at.desc())
             )
         )
@@ -336,24 +411,44 @@ class PlanningService:
                     len(busy_by_user.get(participant.user_id, [])),
                     len(effective),
                 )
+                merged_preference = merge_preferred_practice_time(
+                    merge_cached_practice_preference(
+                        preferences_by_user.get(participant.user_id),
+                        user.timezone,
+                        user.preferred_practice_time_parsed,
+                    ),
+                    user.timezone,
+                    user.preferred_practice_time,
+                )
                 participant_contexts.append(
                     ParticipantContext(
                         user_id=participant.user_id,
                         role=participant.role,
                         timezone=user.timezone,
                         effective_availability=effective,
-                        preference=preferences_by_user.get(participant.user_id),
+                        preference=merged_preference,
                     )
                 )
 
             organizer = users.get(event.organizer_user_id)
             if organizer is None:
                 raise ValueError("Event organizer not found")
+            organizer_preference = merge_preferred_practice_time(
+                merge_cached_practice_preference(
+                    preferences_by_user.get(organizer.id),
+                    organizer.timezone,
+                    organizer.preferred_practice_time_parsed,
+                ),
+                organizer.timezone,
+                organizer.preferred_practice_time,
+            )
             logger.info(
-                "planning event input event=%s name=%s duration_minutes=%s latest_schedule_at=%s next_session_index=%s sessions_remaining=%s required_participants=%s",
+                "planning event input event=%s name=%s duration_minutes=%s earliest_start_date=%s min_days_apart=%s latest_schedule_at=%s next_session_index=%s sessions_remaining=%s required_participants=%s",
                 event.id,
                 event.name,
                 event.duration_minutes,
+                event.earliest_start_date,
+                event.min_days_apart,
                 event.latest_schedule_at,
                 confirmed_count + 1,
                 sessions_remaining,
@@ -363,11 +458,20 @@ class PlanningService:
                 PlanningEventInput(
                     dance_event_id=event.id,
                     dance_name=event.name,
+                    organizer_user_id=organizer.id,
                     organizer_timezone=organizer.timezone,
+                    organizer_preference=organizer_preference,
                     duration_minutes=event.duration_minutes,
+                    earliest_start_date=event.earliest_start_date,
+                    min_days_apart=event.min_days_apart,
                     latest_schedule_at=event.latest_schedule_at,
                     next_session_index=confirmed_count + 1,
                     sessions_remaining=sessions_remaining,
+                    confirmed_session_starts=[
+                        ensure_utc(session.start_at)
+                        for session in event.practice_sessions
+                        if session.status == "confirmed"
+                    ],
                     participants=participant_contexts,
                 )
             )
@@ -398,6 +502,8 @@ class PlanningService:
                     end_at=ensure_utc(session.end_at),
                     room_id=session.room_id,
                     participant_user_ids=required_attendees,
+                    dance_event_id=session.dance_event_id,
+                    session_index=session.session_index,
                 )
             )
         return reservations
@@ -450,3 +556,33 @@ def _derive_event_status(required_session_count: int, confirmed_session_count: i
 
 def _count_confirmed_sessions(practice_sessions: list[PracticeSession]) -> int:
     return sum(1 for session in practice_sessions if session.status == "confirmed")
+
+
+def _validate_result_against_event_constraints(
+    result: PlanningRunResult,
+    selected_starts: list[date],
+) -> None:
+    dance_event = result.dance_event
+    organizer_zone = _organizer_zone_for_result(result)
+    local_date = ensure_utc(result.start_at).astimezone(organizer_zone).date()
+
+    if dance_event.earliest_start_date is not None and local_date < dance_event.earliest_start_date:
+        raise ValueError("Selected planning result is before the dance's earliest start date")
+
+    if dance_event.min_days_apart <= 0:
+        return
+
+    existing_dates = {
+        ensure_utc(session.start_at).astimezone(organizer_zone).date()
+        for session in dance_event.practice_sessions
+        if session.status == "confirmed"
+    }
+    existing_dates.update(selected_starts)
+    if any(abs((local_date - other_date).days) < dance_event.min_days_apart for other_date in existing_dates):
+        raise ValueError("Selected planning result violates the dance's minimum days apart rule")
+
+
+def _organizer_zone_for_result(result: PlanningRunResult):
+    from zoneinfo import ZoneInfo
+
+    return ZoneInfo(result.dance_event.organizer.timezone)

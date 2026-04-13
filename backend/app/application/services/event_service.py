@@ -32,6 +32,8 @@ class EventService:
             description=payload.description,
             organizer_user_id=payload.organizer_user_id,
             duration_minutes=payload.duration_minutes,
+            earliest_start_date=payload.earliest_start_date,
+            min_days_apart=payload.min_days_apart,
             latest_schedule_at=ensure_utc(payload.latest_schedule_at),
             required_session_count=payload.required_session_count,
             status="unscheduled",
@@ -73,10 +75,14 @@ class EventService:
             event.organizer_user_id = payload.organizer_user_id
         if payload.name is not None:
             event.name = payload.name
-        if payload.description is not None:
+        if "description" in payload.model_fields_set:
             event.description = payload.description
         if payload.duration_minutes is not None:
             event.duration_minutes = payload.duration_minutes
+        if "earliest_start_date" in payload.model_fields_set:
+            event.earliest_start_date = payload.earliest_start_date
+        if payload.min_days_apart is not None:
+            event.min_days_apart = payload.min_days_apart
         if payload.latest_schedule_at is not None:
             event.latest_schedule_at = ensure_utc(payload.latest_schedule_at)
         if payload.required_session_count is not None:
