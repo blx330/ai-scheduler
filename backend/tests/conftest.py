@@ -24,7 +24,7 @@ def session_factory(tmp_path: Path):
 
 @pytest.fixture()
 def app(session_factory):
-    settings = Settings(database_url="sqlite:///ignored.db", parser_mode="stub")
+    settings = Settings(database_url="sqlite:///ignored.db")
     return create_app(settings=settings, session_factory=session_factory)
 
 
