@@ -92,6 +92,71 @@ def test_user_profile_caches_parsed_free_text_preferences(client, app) -> None:
     )
 
 
+def test_create_user_reuses_incomplete_registration_for_same_email(client) -> None:
+    initial = client.post(
+        "/api/v1/users",
+        json={
+            "display_name": "Cindy Placeholder",
+            "timezone": "UTC",
+            "email": "cindyhl654@gmail.com",
+        },
+    )
+    assert initial.status_code == 201
+    initial_user = initial.json()
+
+    retry = client.post(
+        "/api/v1/users",
+        json={
+            "display_name": "Cindy Final",
+            "timezone": "America/New_York",
+            "email": "cindyhl654@gmail.com",
+        },
+    )
+    assert retry.status_code == 201
+    retry_user = retry.json()
+    assert retry_user["id"] == initial_user["id"]
+    assert retry_user["display_name"] == "Cindy Final"
+    assert retry_user["timezone"] == "America/New_York"
+
+
+def test_create_user_rejects_duplicate_email_when_registration_completed(client, app) -> None:
+    created = client.post(
+        "/api/v1/users",
+        json={
+            "display_name": "Connected User",
+            "timezone": "UTC",
+            "email": "connected-user@example.com",
+        },
+    )
+    assert created.status_code == 201
+    created_user = created.json()
+
+    session = app.state.session_factory()
+    try:
+        session.add(
+            CalendarConnection(
+                user_id=created_user["id"],
+                provider="google",
+                status="connected",
+                refresh_token="refresh-token",
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    duplicate = client.post(
+        "/api/v1/users",
+        json={
+            "display_name": "Another Person",
+            "timezone": "UTC",
+            "email": "connected-user@example.com",
+        },
+    )
+    assert duplicate.status_code == 400
+    assert duplicate.json()["detail"] == "A user with that email already exists"
+
+
 def test_app_bootstraps_groq_profile_parser_from_groq_env(monkeypatch, session_factory) -> None:
     monkeypatch.setenv("GROQ_API_KEY", "groq-demo-key")
     settings = Settings(database_url="sqlite:///ignored.db")

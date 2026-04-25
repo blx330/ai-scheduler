@@ -1,13 +1,13 @@
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.infrastructure.db.models import DanceEvent, DanceEventParticipant
 from app.api.schemas.users import UserCreate, UserUpdate
 from app.domain.preferences.models import CachedPracticePreference
-from app.infrastructure.db.models import User
+from app.infrastructure.db.models import CalendarConnection, User
 from app.infrastructure.integrations.llm.profile_preference_parser import UserProfilePreferenceParser
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,16 @@ class UserService:
         self.db = db
 
     def create_user(self, payload: UserCreate, preference_parser: UserProfilePreferenceParser | None = None) -> User:
+        existing_by_email = self._find_user_by_email(payload.email)
+        if existing_by_email is not None:
+            if self._is_registration_incomplete(existing_by_email):
+                self._reset_incomplete_user(existing_by_email, payload, preference_parser)
+                self.db.add(existing_by_email)
+                self.db.commit()
+                self.db.refresh(existing_by_email)
+                return existing_by_email
+            raise ValueError("A user with that email already exists")
+
         user = User(
             display_name=payload.display_name,
             timezone=payload.timezone,
@@ -39,6 +49,38 @@ class UserService:
 
     def get_user(self, user_id):
         return self.db.get(User, user_id)
+
+    def _find_user_by_email(self, email: str | None) -> User | None:
+        if not email:
+            return None
+        normalized = email.strip()
+        if not normalized:
+            return None
+        return self.db.scalars(select(User).where(func.lower(User.email) == normalized.lower())).first()
+
+    def _is_registration_incomplete(self, user: User) -> bool:
+        connections = self.db.scalars(
+            select(CalendarConnection)
+            .where(CalendarConnection.user_id == user.id)
+            .where(CalendarConnection.provider == "google")
+        ).all()
+        if not connections:
+            return True
+        return not any(connection.refresh_token or connection.access_token for connection in connections)
+
+    def _reset_incomplete_user(
+        self,
+        user: User,
+        payload: UserCreate,
+        preference_parser: UserProfilePreferenceParser | None = None,
+    ) -> None:
+        user.display_name = payload.display_name
+        user.timezone = payload.timezone
+        user.email = payload.email
+        user.preferred_practice_time = payload.preferred_practice_time.value if payload.preferred_practice_time else None
+        user.preferred_practice_time_raw = None
+        user.preferred_practice_time_parsed = None
+        _apply_user_practice_preferences(user, payload, preference_parser)
 
     def update_user(
         self,
