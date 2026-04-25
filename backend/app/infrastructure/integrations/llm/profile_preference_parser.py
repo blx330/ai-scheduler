@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any, Protocol
 
 from app.domain.preferences.models import CachedPracticePreference, summarize_cached_preference
 
-GROQ_PROFILE_MODEL = "llama3-8b-8192"
+GROQ_PROFILE_MODEL = "llama-3.1-8b-instant"
+logger = logging.getLogger(__name__)
 
 
 class UserProfilePreferenceParser(Protocol):
@@ -94,7 +96,9 @@ Rules:
 - earliest_time and latest_time must be HH:MM in 24-hour format or null.
 - If you are unsure, leave fields empty or null instead of guessing.
 - summary must be a short plain-English summary.
-- Return JSON only with no markdown or commentary."""
+- Do not include markdown code fences.
+- Do not include any text before or after the JSON object.
+- Return one raw JSON object only."""
         completion = client.chat.completions.create(
             model=self.model,
             temperature=0,
@@ -113,12 +117,16 @@ Rules:
                 },
             ],
         )
-        content = (completion.choices[0].message.content or "").strip()
-        if content.startswith("```"):
-            content = content.removeprefix("```json").removeprefix("```").strip()
-            if content.endswith("```"):
-                content = content[:-3].strip()
-        raw_structured = json.loads(content)
+        raw_content = completion.choices[0].message.content or ""
+        logger.info("Raw preference parser LLM response: %s", raw_content)
+
+        content = _extract_json_text(raw_content)
+        try:
+            raw_structured = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Preference parsing failed: model returned non-JSON output. Raw LLM response: {raw_content}"
+            ) from exc
         return _coerce_profile_output(raw_structured, raw_text=raw_text)
 
 
@@ -147,6 +155,18 @@ def _coerce_profile_output(raw_structured: dict[str, Any], raw_text: str) -> dic
     )
     summary = payload.summary_text()
     return payload.model_dump(mode="json") | {"summary": summary}
+
+
+def _extract_json_text(text: str) -> str:
+    cleaned = re.sub(r"```json|```", "", text, flags=re.IGNORECASE).strip()
+    if cleaned.startswith("{") and cleaned.endswith("}"):
+        return cleaned
+
+    start_index = cleaned.find("{")
+    end_index = cleaned.rfind("}")
+    if start_index == -1 or end_index == -1 or end_index <= start_index:
+        return cleaned
+    return cleaned[start_index : end_index + 1]
 
 
 def _extract_time(text: str, patterns: list[str]) -> str | None:

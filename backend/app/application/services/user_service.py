@@ -113,6 +113,6 @@ def _apply_user_practice_preferences(
         user.preferred_practice_time_parsed = (
             cached_preference.model_dump(mode="json") if cached_preference.is_useful() else None
         )
-    except Exception as exc:  # noqa: BLE001 - parser failures should not block profile saves
+    except Exception as exc:  # noqa: BLE001 - parser boundary is untrusted, surface full error to caller
         logger.warning("Failed to parse cached practice preferences for user %s: %s", user.id, exc)
-        user.preferred_practice_time_parsed = None
+        raise ValueError(str(exc)) from exc

@@ -412,10 +412,11 @@ async function requestPlanningRun(startIso, endIso) {
     slot_step_minutes: 60,
   };
 
-  state.planningRun = await apiFetch("/planning-runs", {
+  const planningRunResponse = await apiFetch("/planning-runs", {
     method: "POST",
     body: JSON.stringify(payload),
   });
+  state.planningRun = normalizePlanningRun(planningRunResponse);
 }
 
 function sanitizeStateAfterRefresh() {
@@ -655,6 +656,14 @@ function renderRightSidebar() {
   }
 
   const suggestions = getActiveSuggestions();
+  console.log("Suggested slot render input", {
+    selectedDanceId: state.selectedDanceId,
+    activePracticeKey: state.activePracticeKey,
+    planningStatus: state.planningRun?.status,
+    resultGroups: state.planningRun?.results?.length || 0,
+    suggestionCount: suggestions.length,
+    suggestions,
+  });
   if (!suggestions.length) {
     suggestedSlots.innerHTML = renderEmptyState(
       "Suggested Slots",
@@ -1601,7 +1610,7 @@ function getActiveSuggestions() {
     .find(
       (group) =>
         group.dance_event_id === activePractice.danceId &&
-        group.session_index === activePractice.sessionIndex,
+        Number(group.session_index) === Number(activePractice.sessionIndex),
     )
     ?.recommendations.slice(0, 3) || [];
 }
@@ -1610,6 +1619,60 @@ function getRecommendationById(recommendationId) {
   return (state.planningRun?.results || [])
     .flatMap((group) => group.recommendations || [])
     .find((recommendation) => recommendation.id === recommendationId) || null;
+}
+
+function normalizePlanningRun(planningRun) {
+  if (!planningRun || !Array.isArray(planningRun.results)) {
+    return planningRun;
+  }
+  const [firstResult] = planningRun.results;
+  if (!firstResult) {
+    return {
+      ...planningRun,
+      results: [],
+    };
+  }
+
+  if (Array.isArray(firstResult.recommendations)) {
+    return {
+      ...planningRun,
+      results: planningRun.results.map((group) => ({
+        ...group,
+        recommendations: (group.recommendations || []).map((recommendation) => ({
+          ...recommendation,
+          participant_statuses: recommendation.participant_statuses || [],
+          missing_required_user_ids: recommendation.missing_required_user_ids || [],
+        })),
+      })),
+    };
+  }
+
+  // Backward-compatibility: allow older flat result payloads and group client-side.
+  const grouped = new Map();
+  for (const recommendation of planningRun.results) {
+    if (!recommendation) {
+      continue;
+    }
+    const key = `${recommendation.dance_event_id}::${recommendation.session_index}`;
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        dance_event_id: recommendation.dance_event_id,
+        dance_name: recommendation.dance_name || "",
+        session_index: recommendation.session_index,
+        recommendations: [],
+      });
+    }
+    grouped.get(key).recommendations.push({
+      ...recommendation,
+      participant_statuses: recommendation.participant_statuses || [],
+      missing_required_user_ids: recommendation.missing_required_user_ids || [],
+    });
+  }
+
+  return {
+    ...planningRun,
+    results: Array.from(grouped.values()),
+  };
 }
 
 function getSelectedSuggestion() {
