@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision = "0008_remove_legacy_scheduler_tables"
+revision = "0008_remove_legacy"
 down_revision = "0007_practice_sync"
 branch_labels = None
 depends_on = None

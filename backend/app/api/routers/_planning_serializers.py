@@ -142,5 +142,5 @@ def _optional_available_count(participant_statuses_json: list[dict]) -> int:
 
 def _planning_run_message(run: PlanningRun) -> str | None:
     if run.status == "no_results":
-        return "No availability found between 8:00 AM and 12:00 PM."
+        return "No availability found between 8:00 AM and 12:00 AM."
     return None

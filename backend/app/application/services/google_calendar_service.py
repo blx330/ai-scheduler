@@ -376,6 +376,6 @@ def _decode_base64(value: str) -> bytes:
 
 def _has_any_scope(scopes: str | None, required_scopes: frozenset[str]) -> bool:
     if not scopes:
-        return True
+        return False
     granted_scopes = {scope.strip() for scope in scopes.split() if scope.strip()}
     return bool(granted_scopes & required_scopes)

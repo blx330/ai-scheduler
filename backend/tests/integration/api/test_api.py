@@ -1,10 +1,12 @@
 from datetime import datetime, timezone
 from datetime import timedelta
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 from app.infrastructure.config import Settings
 from app.infrastructure.db.models import CalendarBusyInterval, CalendarConnection
 from app.infrastructure.integrations.google_calendar.client import GoogleBusyInterval, GoogleCalendarSummary, GoogleCreatedEvent
+from app.infrastructure.integrations.google_calendar.client import GoogleOAuthTokens
 from app.infrastructure.integrations.llm.profile_preference_parser import GroqUserProfilePreferenceParser
 from app.main import create_app
 
@@ -287,6 +289,7 @@ def test_google_busy_sync_persists_selected_calendars_and_overview_returns_inter
                 provider="google",
                 status="connected",
                 access_token="live-token",
+                scopes="https://www.googleapis.com/auth/calendar",
                 token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
             )
         )
@@ -333,3 +336,75 @@ def test_google_busy_sync_persists_selected_calendars_and_overview_returns_inter
     assert overview["busy_intervals"][0]["user_id"] == user["id"]
     assert overview["busy_intervals"][0]["start_at"] == "2026-03-24T14:00:00Z"
     assert overview["busy_intervals"][0]["end_at"] == "2026-03-24T16:00:00Z"
+
+
+def test_google_oauth_state_links_connection_to_requested_user(client, app) -> None:
+    class FakeGoogleClient:
+        def __init__(self) -> None:
+            self.last_state = ""
+
+        def build_authorization_url(self, state: str) -> str:
+            self.last_state = state
+            return f"https://example.com/oauth?state={state}"
+
+        def exchange_code(self, code: str) -> GoogleOAuthTokens:
+            assert code == "auth-code"
+            return GoogleOAuthTokens(
+                access_token="token-from-exchange",
+                refresh_token="refresh-from-exchange",
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                scope="https://www.googleapis.com/auth/calendar",
+            )
+
+        def refresh_access_token(self, refresh_token: str) -> GoogleOAuthTokens:  # pragma: no cover - unused
+            raise NotImplementedError
+
+        def list_calendars(self, access_token: str) -> list[GoogleCalendarSummary]:  # pragma: no cover - unused
+            return []
+
+        def get_free_busy(self, access_token: str, calendar_ids: list[str], time_min: datetime, time_max: datetime):  # pragma: no cover - unused
+            return []
+
+        def create_event(
+            self,
+            access_token: str,
+            calendar_id: str,
+            title: str,
+            start_at: datetime,
+            end_at: datetime,
+            timezone_name: str,
+            attendee_emails: list[str],
+            description: Optional[str] = None,
+        ) -> GoogleCreatedEvent:  # pragma: no cover - unused
+            raise NotImplementedError
+
+        def delete_event(self, access_token: str, calendar_id: str, event_id: str) -> None:  # pragma: no cover - unused
+            raise NotImplementedError
+
+    fake_client = FakeGoogleClient()
+    app.state.google_calendar_client = fake_client
+
+    target_user = client.post(
+        "/api/v1/users",
+        json={"display_name": "OAuth Target", "timezone": "UTC", "email": "oauth-target@example.com"},
+    ).json()
+
+    start_response = client.post(
+        "/api/v1/google/oauth/start",
+        json={"user_id": target_user["id"]},
+    )
+    assert start_response.status_code == 200
+    authorization_url = start_response.json()["authorization_url"]
+    state = parse_qs(urlparse(authorization_url).query)["state"][0]
+    assert state == fake_client.last_state
+
+    callback_response = client.get(
+        "/api/v1/google/oauth/callback",
+        params={"code": "auth-code", "state": state},
+        follow_redirects=False,
+    )
+    assert callback_response.status_code in {302, 307}
+
+    connection_response = client.get(f"/api/v1/users/{target_user['id']}/google/connection")
+    assert connection_response.status_code == 200
+    assert connection_response.json()["connected"] is True

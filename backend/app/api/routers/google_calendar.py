@@ -24,6 +24,20 @@ from app.infrastructure.integrations.google_calendar.client import GoogleCalenda
 router = APIRouter(tags=["google-calendar"])
 
 
+@router.get("/google-calendar/auth", response_model=GoogleOAuthStartResponse)
+def start_google_oauth_for_user(
+    user_id: UUID = Query(...),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    client: GoogleCalendarProvider = Depends(get_google_calendar_client),
+) -> GoogleOAuthStartResponse:
+    try:
+        authorization_url = GoogleCalendarService(db, settings, client).begin_oauth(user_id)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return GoogleOAuthStartResponse(authorization_url=authorization_url)
+
+
 @router.post("/google/oauth/start", response_model=GoogleOAuthStartResponse)
 def start_google_oauth(
     payload: GoogleOAuthStartRequest,
