@@ -4,7 +4,7 @@ from uuid import uuid4
 from app.domain.availability.models import Interval
 from app.domain.preferences.models import ParsedPreference
 from app.domain.scheduling.models import ParticipantContext, ScheduleSlot
-from app.domain.scheduling.scoring import preference_bonus_for_user, score_slot
+from app.domain.scheduling.scoring import preference_bonus_for_user, score_slot, score_time_tier
 
 
 def test_preference_bonus_caps_to_one_signal_per_category() -> None:
@@ -66,7 +66,32 @@ def test_score_slot_counts_optional_and_preference_bonuses() -> None:
 
     result = score_slot(slot, participants)
 
-    assert result.total_score == 3.25
+    assert result.total_score == 4.25
     assert result.optional_available_count == 1
     assert result.score_breakdown["optional_attendees"] == 1.5
     assert result.score_breakdown["preference_bonus"] == 1.75
+    assert result.score_breakdown["time_tier_bonus"] == 1.0
+
+
+def test_time_tier_scoring_prioritizes_evening_slots() -> None:
+    tier_1_slot = ScheduleSlot(
+        start_at=datetime(2026, 3, 23, 18, 0, tzinfo=timezone.utc),
+        end_at=datetime(2026, 3, 23, 19, 0, tzinfo=timezone.utc),
+    )
+    tier_2_slot_afternoon = ScheduleSlot(
+        start_at=datetime(2026, 3, 23, 16, 0, tzinfo=timezone.utc),
+        end_at=datetime(2026, 3, 23, 17, 0, tzinfo=timezone.utc),
+    )
+    tier_2_slot_late = ScheduleSlot(
+        start_at=datetime(2026, 3, 23, 22, 0, tzinfo=timezone.utc),
+        end_at=datetime(2026, 3, 23, 23, 0, tzinfo=timezone.utc),
+    )
+    tier_3_slot = ScheduleSlot(
+        start_at=datetime(2026, 3, 23, 10, 0, tzinfo=timezone.utc),
+        end_at=datetime(2026, 3, 23, 11, 0, tzinfo=timezone.utc),
+    )
+
+    assert score_time_tier(tier_1_slot, "UTC") == 6.0
+    assert score_time_tier(tier_2_slot_afternoon, "UTC") == 3.0
+    assert score_time_tier(tier_2_slot_late, "UTC") == 3.0
+    assert score_time_tier(tier_3_slot, "UTC") == 1.0

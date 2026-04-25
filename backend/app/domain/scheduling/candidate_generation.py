@@ -47,8 +47,15 @@ def _within_daily_window(
         return True
     local_start = start_at.astimezone(zone)
     local_end = end_at.astimezone(zone)
-    return (
-        local_start.date() == local_end.date()
-        and local_start.timetz().replace(tzinfo=None) >= window_start
-        and local_end.timetz().replace(tzinfo=None) <= window_end
-    )
+
+    slot_start_minutes = local_start.hour * 60 + local_start.minute
+    slot_end_minutes = local_end.hour * 60 + local_end.minute
+    if local_end.date() > local_start.date() or slot_end_minutes <= slot_start_minutes:
+        slot_end_minutes += 24 * 60
+
+    window_start_minutes = window_start.hour * 60 + window_start.minute
+    window_end_minutes = window_end.hour * 60 + window_end.minute
+    if window_end_minutes <= window_start_minutes:
+        window_end_minutes += 24 * 60
+
+    return slot_start_minutes >= window_start_minutes and slot_end_minutes <= window_end_minutes

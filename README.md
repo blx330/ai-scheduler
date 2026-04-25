@@ -37,7 +37,8 @@ Notes:
 - Required attendees are the only attendee type used in the UI.
 - Busy-time sync uses real Google Calendar data.
 - Event creation uses the organizer's selected write calendar.
-- Candidate generation is restricted to 8:00 AM to 6:00 PM in the organizer timezone for demo sanity.
+- Candidate generation is restricted to 8:00 AM to 12:00 AM in the organizer timezone.
+- 12:00 AM to 8:00 AM is a hard forbidden window and never produces candidates.
 
 ## Repo layout
 
@@ -91,6 +92,15 @@ APP_BASE_URL=http://localhost:8000
 FRONTEND_URL=http://localhost:8000
 GOOGLE_REDIRECT_URI=http://localhost:8000/api/v1/google/oauth/callback
 ```
+
+Google Calendar OAuth will not work unless all of these are set:
+
+- `OAUTH_STATE_SECRET`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_REDIRECT_URI`
+
+If those values are missing, the UI will surface: `OAuth not configured - set env vars`.
 
 ## Local run
 
@@ -176,7 +186,7 @@ PYTHONPYCACHEPREFIX=/tmp/pycache PYTHONPATH=. python -m pytest -q
 ## Demo checklist
 
 1. Create at least two users with real email addresses.
-2. Click `Connect Google` for each user and finish the OAuth flow.
+2. Click `Connect Google Calendar` on each member card and finish the OAuth flow.
 3. Click `Refresh calendars` and save the source/write calendar choices.
 4. Pick an organizer.
 5. Check required attendees.

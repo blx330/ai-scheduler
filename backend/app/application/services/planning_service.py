@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime
 import logging
 from types import SimpleNamespace
 from typing import Optional
@@ -111,6 +111,7 @@ class PlanningService:
         self,
         run_id: UUID,
         result_ids: list[UUID],
+        manual_time_overrides: dict[UUID, tuple[datetime, datetime]] | None = None,
         google_calendar_service: GoogleCalendarService | None = None,
     ) -> tuple[PlanningRun, list[PracticeSession]]:
         run = self.get_planning_run(run_id)
@@ -145,8 +146,16 @@ class PlanningService:
         if duplicate_targets:
             raise ValueError("Cannot confirm multiple recommendations for the same event session")
 
-        confirmation_start = min(result.start_at for result in results)
-        confirmation_end = max(result.end_at for result in results)
+        manual_time_overrides = manual_time_overrides or {}
+
+        def _effective_window(result: PlanningRunResult):
+            override = manual_time_overrides.get(result.id)
+            if override is None:
+                return result.start_at, result.end_at
+            return ensure_utc(override[0]), ensure_utc(override[1])
+
+        confirmation_start = min(_effective_window(result)[0] for result in results)
+        confirmation_end = max(_effective_window(result)[1] for result in results)
         active_reservations = self._load_confirmed_reservations(
             horizon_start=confirmation_start,
             horizon_end=confirmation_end,
@@ -157,22 +166,26 @@ class PlanningService:
         selected_starts_by_event: dict[UUID, list[date]] = defaultdict(list)
         ordered_results = sorted(results, key=lambda item: (item.start_at, item.dance_event_id, item.session_index))
         for result in ordered_results:
+            effective_start_at, effective_end_at = _effective_window(result)
+            if effective_end_at <= effective_start_at:
+                raise ValueError("Confirmed slot end must be after start")
             _validate_result_against_event_constraints(
                 result=result,
+                start_at=effective_start_at,
                 selected_starts=selected_starts_by_event[result.dance_event_id],
             )
             required_attendees = frozenset(_required_attendee_ids(result))
             if any(
                 reservation.room_id == result.room_id
-                and result.start_at < reservation.end_at
-                and result.end_at > reservation.start_at
+                and effective_start_at < reservation.end_at
+                and effective_end_at > reservation.start_at
                 for reservation in active_reservations
             ):
                 raise ValueError("Selected planning result conflicts with an existing room reservation")
             if any(
                 required_attendees & reservation.participant_user_ids
-                and result.start_at < reservation.end_at
-                and result.end_at > reservation.start_at
+                and effective_start_at < reservation.end_at
+                and effective_end_at > reservation.start_at
                 for reservation in active_reservations
             ):
                 raise ValueError("Selected planning result conflicts with an existing participant reservation")
@@ -189,8 +202,8 @@ class PlanningService:
             practice_session = PracticeSession(
                 dance_event_id=result.dance_event_id,
                 session_index=result.session_index,
-                start_at=result.start_at,
-                end_at=result.end_at,
+                start_at=effective_start_at,
+                end_at=effective_end_at,
                 status="confirmed",
                 room_id=result.room_id,
                 source_run_id=run.id,
@@ -205,13 +218,13 @@ class PlanningService:
             confirmed_sessions.append(practice_session)
             confirmed_session_ids.append(practice_session.id)
             selected_starts_by_event[result.dance_event_id].append(
-                ensure_utc(result.start_at).astimezone(_organizer_zone_for_result(result)).date()
+                ensure_utc(effective_start_at).astimezone(_organizer_zone_for_result(result)).date()
             )
             active_reservations.append(
                 SessionReservation(
                     identifier=f"{result.dance_event_id}:{result.session_index}",
-                    start_at=result.start_at,
-                    end_at=result.end_at,
+                    start_at=effective_start_at,
+                    end_at=effective_end_at,
                     room_id=result.room_id,
                     participant_user_ids=required_attendees,
                     dance_event_id=result.dance_event_id,
@@ -546,11 +559,13 @@ def _count_confirmed_sessions(practice_sessions: list[PracticeSession]) -> int:
 
 def _validate_result_against_event_constraints(
     result: PlanningRunResult,
+    start_at: datetime | None,
     selected_starts: list[date],
 ) -> None:
     dance_event = result.dance_event
     organizer_zone = _organizer_zone_for_result(result)
-    local_date = ensure_utc(result.start_at).astimezone(organizer_zone).date()
+    candidate_start = ensure_utc(start_at or result.start_at)
+    local_date = candidate_start.astimezone(organizer_zone).date()
 
     if dance_event.earliest_start_date is not None and local_date < dance_event.earliest_start_date:
         raise ValueError("Selected planning result is before the dance's earliest start date")

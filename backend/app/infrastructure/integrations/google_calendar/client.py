@@ -319,13 +319,13 @@ class GoogleCalendarClient:
 
 class NoopGoogleCalendarProvider:
     def build_authorization_url(self, state: str) -> str:
-        raise RuntimeError("Google Calendar is not configured")
+        raise RuntimeError("OAuth not configured - set env vars")
 
     def exchange_code(self, code: str) -> GoogleOAuthTokens:
-        raise RuntimeError("Google Calendar is not configured")
+        raise RuntimeError("OAuth not configured - set env vars")
 
     def refresh_access_token(self, refresh_token: str) -> GoogleOAuthTokens:
-        raise RuntimeError("Google Calendar is not configured")
+        raise RuntimeError("OAuth not configured - set env vars")
 
     def list_calendars(self, access_token: str) -> list[GoogleCalendarSummary]:
         return []
@@ -350,7 +350,7 @@ class NoopGoogleCalendarProvider:
         attendee_emails: list[str],
         description: str | None = None,
     ) -> GoogleCreatedEvent:
-        raise RuntimeError("Google Calendar is not configured")
+        raise RuntimeError("OAuth not configured - set env vars")
 
     def delete_event(
         self,
@@ -358,7 +358,7 @@ class NoopGoogleCalendarProvider:
         calendar_id: str,
         event_id: str,
     ) -> None:
-        raise RuntimeError("Google Calendar is not configured")
+        raise RuntimeError("OAuth not configured - set env vars")
 
 
 def build_google_calendar_client(

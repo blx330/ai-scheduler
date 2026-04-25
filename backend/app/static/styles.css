@@ -561,6 +561,13 @@ p {
   color: var(--muted);
 }
 
+.warning-note {
+  background: #fff4e5;
+  color: #9a3412;
+  border: 1px solid #fed7aa;
+  font-weight: 600;
+}
+
 .inline-error {
   background: var(--danger-soft);
   color: var(--danger);

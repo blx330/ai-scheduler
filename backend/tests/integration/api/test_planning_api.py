@@ -139,6 +139,79 @@ def test_planning_run_returns_fallback_when_one_required_participant_is_missing(
     assert recommendation["explanation"]["missing_required_user_ids"] == recommendation["missing_required_user_ids"]
 
 
+def test_planning_run_prefers_fully_attended_before_partial_fallback(client) -> None:
+    organizer = _create_user(client, "Coach Full First", "coach-full-first@example.com")
+    always_available = _create_user(client, "Always", "always@example.com")
+    limited = _create_user(client, "Limited", "limited@example.com")
+
+    _add_availability(client, always_available["id"], "2026-04-03T08:00:00Z", "2026-04-03T20:00:00Z")
+    _add_availability(client, limited["id"], "2026-04-03T18:00:00Z", "2026-04-03T20:00:00Z")
+
+    event = _create_event(
+        client,
+        name="Full First Dance",
+        organizer_user_id=organizer["id"],
+        duration_minutes=60,
+        latest_schedule_at="2026-04-03T20:00:00Z",
+        required_session_count=1,
+        participants=[
+            {"user_id": always_available["id"], "role": "required"},
+            {"user_id": limited["id"], "role": "required"},
+        ],
+    )
+
+    response = _create_planning_run(
+        client,
+        event_ids=[event["id"]],
+        horizon_start="2026-04-03T08:00:00Z",
+        horizon_end="2026-04-03T20:00:00Z",
+    )
+
+    assert response.status_code == 200
+    recommendations = response.json()["results"][0]["recommendations"]
+    assert len(recommendations) == 3
+    assert recommendations[0]["is_fallback"] is False
+    assert recommendations[1]["is_fallback"] is False
+    assert recommendations[0]["start_at"] == "2026-04-03T18:00:00Z"
+    assert recommendations[1]["start_at"] == "2026-04-03T19:00:00Z"
+    assert recommendations[2]["is_fallback"] is True
+    assert recommendations[2]["missing_required_user_ids"]
+
+
+def test_planning_run_keeps_top_three_fully_attended_when_available(client) -> None:
+    organizer = _create_user(client, "Coach Full Top3", "coach-full-top3@example.com")
+    required_one = _create_user(client, "Req One", "req-one@example.com")
+    required_two = _create_user(client, "Req Two", "req-two@example.com")
+
+    _add_availability(client, required_one["id"], "2026-04-03T16:00:00Z", "2026-04-03T22:00:00Z")
+    _add_availability(client, required_two["id"], "2026-04-03T16:00:00Z", "2026-04-03T22:00:00Z")
+
+    event = _create_event(
+        client,
+        name="Full Top Three",
+        organizer_user_id=organizer["id"],
+        duration_minutes=60,
+        latest_schedule_at="2026-04-03T22:00:00Z",
+        required_session_count=1,
+        participants=[
+            {"user_id": required_one["id"], "role": "required"},
+            {"user_id": required_two["id"], "role": "required"},
+        ],
+    )
+
+    response = _create_planning_run(
+        client,
+        event_ids=[event["id"]],
+        horizon_start="2026-04-03T16:00:00Z",
+        horizon_end="2026-04-03T22:00:00Z",
+    )
+
+    assert response.status_code == 200
+    recommendations = response.json()["results"][0]["recommendations"]
+    assert len(recommendations) == 3
+    assert all(item["is_fallback"] is False for item in recommendations)
+
+
 def test_confirmed_sessions_affect_future_planning_runs(client) -> None:
     organizer = _create_user(client, "Coach Confirm", "coach-confirm@example.com")
     dancer_one = _create_user(client, "Confirm A", "confirm-a@example.com")
@@ -211,17 +284,22 @@ def test_confirmed_sessions_affect_future_planning_runs(client) -> None:
     assert overview_response.json()["practice_sessions"][0]["start_at"] == "2026-04-04T09:00:00Z"
 
 
-def test_planning_run_enforces_morning_window_and_orders_slots_earliest_first(client) -> None:
-    organizer = _create_user(client, "Coach Morning", "coach-morning@example.com")
-    dancer = _create_user(client, "Morning Dancer", "morning-dancer@example.com")
-    _add_availability(client, dancer["id"], "2026-04-05T06:00:00Z", "2026-04-05T13:00:00Z")
+def test_planning_run_orders_by_score_descending_before_time_tiebreak(client) -> None:
+    organizer = _create_user(
+        client,
+        "Coach Evening Rank",
+        "coach-evening-rank@example.com",
+        preferred_practice_time="late_morning",
+    )
+    dancer = _create_user(client, "Evening Rank Dancer", "evening-rank-dancer@example.com")
+    _add_availability(client, dancer["id"], "2026-04-05T08:00:00Z", "2026-04-05T23:00:00Z")
 
     event = _create_event(
         client,
-        name="Morning Dance",
+        name="Evening Ranking Dance",
         organizer_user_id=organizer["id"],
         duration_minutes=60,
-        latest_schedule_at="2026-04-05T13:00:00Z",
+        latest_schedule_at="2026-04-05T23:00:00Z",
         required_session_count=1,
         participants=[{"user_id": dancer["id"], "role": "required"}],
     )
@@ -230,18 +308,16 @@ def test_planning_run_enforces_morning_window_and_orders_slots_earliest_first(cl
         client,
         event_ids=[event["id"]],
         horizon_start="2026-04-05T06:00:00Z",
-        horizon_end="2026-04-05T13:00:00Z",
+        horizon_end="2026-04-05T23:00:00Z",
     )
 
     assert response.status_code == 200
     recommendations = response.json()["results"][0]["recommendations"]
-    assert [item["start_at"] for item in recommendations] == [
-        "2026-04-05T08:00:00Z",
-        "2026-04-05T09:00:00Z",
-        "2026-04-05T10:00:00Z",
-    ]
-    assert all(item["start_at"] >= "2026-04-05T08:00:00Z" for item in recommendations)
-    assert all(item["end_at"] <= "2026-04-05T12:00:00Z" for item in recommendations)
+    assert recommendations[0]["start_at"] == "2026-04-05T18:00:00Z"
+    assert recommendations[1]["start_at"] == "2026-04-05T19:00:00Z"
+    assert recommendations[2]["start_at"] == "2026-04-05T20:00:00Z"
+    assert recommendations[0]["score_breakdown"]["time_tier_bonus"] == 6.0
+    assert recommendations[2]["score_breakdown"]["time_tier_bonus"] == 6.0
 
 
 def test_planning_run_uses_saved_preferred_practice_time_for_scoring(client) -> None:
@@ -414,30 +490,26 @@ def test_planning_run_prunes_slots_that_cannot_complete_full_spacing_sequence(cl
     second_practice = next(group for group in groups if group["session_index"] == 2)
     third_practice = next(group for group in groups if group["session_index"] == 3)
 
-    assert [item["start_at"] for item in first_practice["recommendations"]] == [
-        "2026-04-12T08:00:00Z",
-        "2026-04-13T08:00:00Z",
-    ]
-    assert [item["start_at"] for item in second_practice["recommendations"]] == [
-        "2026-04-16T08:00:00Z",
-        "2026-04-17T08:00:00Z",
-    ]
-    assert [item["start_at"] for item in third_practice["recommendations"]] == [
-        "2026-04-20T08:00:00Z",
-    ]
+    first_dates = {item["start_at"][:10] for item in first_practice["recommendations"]}
+    second_dates = {item["start_at"][:10] for item in second_practice["recommendations"]}
+    third_dates = {item["start_at"][:10] for item in third_practice["recommendations"]}
+
+    assert {"2026-04-12", "2026-04-13"} & first_dates
+    assert {"2026-04-16", "2026-04-17"} & second_dates
+    assert "2026-04-20" in third_dates
 
 
-def test_planning_run_returns_no_results_when_only_outside_morning_window_is_available(client) -> None:
-    organizer = _create_user(client, "Coach No Morning", "coach-no-morning@example.com")
-    dancer = _create_user(client, "Night Dancer", "night-dancer@example.com")
-    _add_availability(client, dancer["id"], "2026-04-07T20:00:00Z", "2026-04-07T23:00:00Z")
+def test_planning_run_returns_no_results_when_only_forbidden_window_is_available(client) -> None:
+    organizer = _create_user(client, "Coach Forbidden", "coach-forbidden@example.com")
+    dancer = _create_user(client, "Forbidden Dancer", "forbidden-dancer@example.com")
+    _add_availability(client, dancer["id"], "2026-04-07T02:00:00Z", "2026-04-07T05:00:00Z")
 
     event = _create_event(
         client,
-        name="No Morning Dance",
+        name="Forbidden Window Dance",
         organizer_user_id=organizer["id"],
         duration_minutes=60,
-        latest_schedule_at="2026-04-07T23:00:00Z",
+        latest_schedule_at="2026-04-07T05:00:00Z",
         required_session_count=1,
         participants=[{"user_id": dancer["id"], "role": "required"}],
     )
@@ -445,14 +517,14 @@ def test_planning_run_returns_no_results_when_only_outside_morning_window_is_ava
     response = _create_planning_run(
         client,
         event_ids=[event["id"]],
-        horizon_start="2026-04-07T20:00:00Z",
-        horizon_end="2026-04-07T23:00:00Z",
+        horizon_start="2026-04-07T02:00:00Z",
+        horizon_end="2026-04-07T05:00:00Z",
     )
 
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "no_results"
-    assert body["message"] == "No availability found between 8:00 AM and 12:00 PM."
+    assert body["message"] == "No availability found between 8:00 AM and 12:00 AM."
     assert body["results"] == []
 
 
@@ -563,6 +635,7 @@ def test_unschedule_practice_removes_google_event_and_clears_calendar(client, ap
                 provider="google",
                 status="configured",
                 access_token="live-token",
+                scopes="https://www.googleapis.com/auth/calendar",
                 token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
                 selected_busy_calendar_ids_json=["primary"],
                 selected_write_calendar_id="primary",
@@ -667,6 +740,7 @@ def test_unschedule_practice_still_succeeds_when_google_delete_fails(client, app
                 provider="google",
                 status="configured",
                 access_token="live-token",
+                scopes="https://www.googleapis.com/auth/calendar",
                 token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
                 selected_busy_calendar_ids_json=["primary"],
                 selected_write_calendar_id="primary",

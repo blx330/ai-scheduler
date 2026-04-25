@@ -8,13 +8,12 @@ const PARTICIPANT_COLORS = [
   "#f8d6ef",
   "#e4f3c7",
 ];
-const STRICT_PRACTICE_WINDOW_LABEL = "8:00 AM-12:00 PM";
+const STRICT_PRACTICE_WINDOW_LABEL = "8:00 AM-12:00 AM";
 
 const GRID_START_HOUR = 7;
 const GRID_END_HOUR = 24;
 const HOUR_ROW_HEIGHT = 72;
 const TOTAL_GRID_MINUTES = (GRID_END_HOUR - GRID_START_HOUR) * 60;
-const DEFAULT_ROOM_LABEL = "Not set";
 
 const state = {
   users: [],
@@ -34,7 +33,6 @@ const state = {
   activePracticeKey: null,
   selectedSuggestionId: null,
   slotDrafts: {},
-  sessionLocationOverrides: {},
   confirmedSessionDrafts: {},
   editingDanceId: null,
   focusedSettingsUserId: null,
@@ -622,7 +620,6 @@ function renderRightSidebar() {
   }
 
   const requiredCount = selectedDance.participants.filter((participant) => participant.role === "required").length;
-  const locationLabel = getLocationLabel(selectedDance.id, activePractice?.sessionIndex || remainingPractice?.sessionIndex || 1);
 
   selectedDanceSummary.innerHTML = `
     <div>
@@ -637,10 +634,6 @@ function renderRightSidebar() {
       <div class="summary-metric">
         <span class="summary-metric-label">Required participants</span>
         <strong>${requiredCount}</strong>
-      </div>
-      <div class="summary-metric">
-        <span class="summary-metric-label">Location</span>
-        <strong>${escapeHtml(locationLabel)}</strong>
       </div>
       <div class="summary-metric">
         <span class="summary-metric-label">Progress</span>
@@ -679,6 +672,7 @@ function renderSuggestionCard(suggestion) {
   const display = getSuggestionDisplay(suggestion);
   const availableNames = getAvailableParticipantNames(suggestion);
   const conflicts = getConflictText(suggestion);
+  const missingRequiredWarning = getMissingRequiredWarning(suggestion);
   const reasonText = getReasonText(suggestion);
   const isSelected = state.selectedSuggestionId === suggestion.id;
 
@@ -702,6 +696,8 @@ function renderSuggestionCard(suggestion) {
           <span>Conflicts</span>
           <div>${escapeHtml(conflicts)}</div>
         </div>
+
+        ${missingRequiredWarning ? `<div class="inline-note warning-note">${escapeHtml(missingRequiredWarning)}</div>` : ""}
 
         <div class="slot-detail">
           <span>Reason</span>
@@ -731,21 +727,13 @@ function renderSelectedSlotEditor() {
         End time
         <input data-slot-field="end_at" type="datetime-local" value="${toLocalDateTimeInputValue(display.end_at)}" />
       </label>
-      <label>
-        Location/room
-        <input data-slot-field="location" type="text" value="${escapeAttribute(display.location === DEFAULT_ROOM_LABEL ? "" : display.location || "")}" placeholder="Studio A" />
-      </label>
     </div>
   `;
 
   const timeModified = isSuggestionTimeModified(selectedSuggestion.id);
-  const locationModified = Boolean(getSlotDraft(selectedSuggestion.id)?.location?.trim());
   const notes = [];
   if (timeModified) {
-    notes.push("Time edits update the preview only. The current backend confirm endpoint can only confirm the original suggested slot.");
-  }
-  if (locationModified) {
-    notes.push("Location is stored as a frontend placeholder because the current backend response does not include a room name field.");
+    notes.push("Time edits will be used when confirming this slot.");
   }
   if (notes.length) {
     selectedSlotNote.textContent = notes.join(" ");
@@ -875,8 +863,6 @@ function renderConfirmedBlock(segment, column, columnCount) {
 
   const editable = state.confirmedEditMode ? "editable" : "";
   const dragging = state.dragState?.type === "confirmed" && state.dragState.id === segment.id ? "dragging" : "";
-  const location = segment.location && segment.location !== DEFAULT_ROOM_LABEL ? ` · ${segment.location}` : "";
-
   return `
     <div
       class="calendar-block confirmed ${editable} ${dragging}"
@@ -884,7 +870,7 @@ function renderConfirmedBlock(segment, column, columnCount) {
       style="${blockPlacementStyle(placement, column, columnCount)}"
     >
       <div class="block-title">${escapeHtml(segment.dance_name)} · Practice ${segment.session_index}</div>
-      <div class="block-subtitle">${formatDanceTimeRange(segment.dance_event_id, segment.start_at, segment.end_at)}${escapeHtml(location)}</div>
+      <div class="block-subtitle">${formatDanceTimeRange(segment.dance_event_id, segment.start_at, segment.end_at)}</div>
       <div class="block-subtitle">${state.confirmedEditMode ? "Confirmed · drag to preview" : "Confirmed practice"}</div>
     </div>
   `;
@@ -934,13 +920,19 @@ function renderSettingsUserCard(user) {
             escapeHtml(user.preferred_practice_time_summary || "No saved practice preference")
           }</span>
         </div>
-        <span class="status-badge ${connection.connected ? "status-completed" : "status-unscheduled"}">${escapeHtml(connection.status || "disconnected")}</span>
+        <span class="status-badge ${connection.connected ? "status-completed" : "status-unscheduled"}">${escapeHtml(connection.connected ? "✓ Google Calendar Connected" : (connection.status || "disconnected"))}</span>
       </div>
 
       <div class="settings-user-actions">
-        <button type="button" class="secondary-button" data-user-action="connect" data-user-id="${escapeHtml(user.id)}">Connect Google</button>
+        <button type="button" class="secondary-button" data-user-action="connect" data-user-id="${escapeHtml(user.id)}">Connect Google Calendar</button>
+        ${
+          connection.connected
+            ? `
         <button type="button" class="secondary-button" data-user-action="refresh-calendars" data-user-id="${escapeHtml(user.id)}">Refresh calendars</button>
-        <button type="button" class="secondary-button" data-user-action="sync-busy" data-user-id="${escapeHtml(user.id)}">Sync visible week</button>
+        <button type="button" class="secondary-button" data-user-action="sync-busy" data-user-id="${escapeHtml(user.id)}">Sync Busy Times</button>
+        `
+            : ""
+        }
       </div>
 
       <div class="select-grid">
@@ -1070,22 +1062,20 @@ async function confirmSelectedSlot() {
   if (!selectedSuggestion || !state.planningRun) {
     throw new Error("Select a suggestion first.");
   }
-
-  if (isSuggestionTimeModified(selectedSuggestion.id)) {
-    throw new Error("Reset the slot to the original suggested time before confirming. Manual time edits are preview-only right now.");
-  }
+  const selectedDisplay = getSuggestionDisplay(selectedSuggestion);
 
   await apiFetch(`/planning-runs/${state.planningRun.id}/confirm`, {
     method: "POST",
     body: JSON.stringify({
-      result_ids: [selectedSuggestion.id],
+      confirmations: [
+        {
+          result_id: selectedSuggestion.id,
+          start_at: selectedDisplay.start_at,
+          end_at: selectedDisplay.end_at,
+        },
+      ],
     }),
   });
-
-  const draft = getSlotDraft(selectedSuggestion.id);
-  if (draft?.location?.trim()) {
-    state.sessionLocationOverrides[practiceKey(selectedSuggestion.dance_event_id, selectedSuggestion.session_index)] = draft.location.trim();
-  }
 
   state.selectedSuggestionId = null;
   await refreshSchedulerData();
@@ -1143,9 +1133,7 @@ function handleSlotEditorChange(event) {
   }
 
   const draft = ensureSlotDraft(selectedSuggestion);
-  if (field === "location") {
-    draft.location = event.target.value;
-  } else if (field === "start_at") {
+  if (field === "start_at") {
     const value = fromLocalDateTimeInputValue(event.target.value);
     if (value) {
       draft.start_at = value;
@@ -1382,10 +1370,7 @@ async function submitDanceForm() {
 }
 
 async function beginGoogleOauth(userId) {
-  const response = await apiFetch("/google/oauth/start", {
-    method: "POST",
-    body: JSON.stringify({ user_id: userId }),
-  });
+  const response = await apiFetch(`/google-calendar/auth?user_id=${encodeURIComponent(userId)}`);
   window.location.href = response.authorization_url;
 }
 
@@ -1676,7 +1661,6 @@ function getRenderedPracticeSessions() {
       dance_name: dance?.name || "Dance",
       start_at: preview.start_at || session.start_at,
       end_at: preview.end_at || session.end_at,
-      location: getLocationLabel(session.dance_event_id, session.session_index),
     };
   });
 }
@@ -1687,7 +1671,6 @@ function getSuggestionDisplay(recommendation) {
     ...recommendation,
     start_at: draft?.start_at || recommendation.start_at,
     end_at: draft?.end_at || recommendation.end_at,
-    location: draft?.location || getLocationLabel(recommendation.dance_event_id, recommendation.session_index),
   };
 }
 
@@ -1696,7 +1679,6 @@ function ensureSlotDraft(recommendation) {
     state.slotDrafts[recommendation.id] = {
       start_at: recommendation.start_at,
       end_at: recommendation.end_at,
-      location: "",
     };
   }
   return state.slotDrafts[recommendation.id];
@@ -1715,15 +1697,8 @@ function isSuggestionTimeModified(recommendationId) {
   return draft.start_at !== recommendation.start_at || draft.end_at !== recommendation.end_at;
 }
 
-function getLocationLabel(danceId, sessionIndex) {
-  return state.sessionLocationOverrides[practiceKey(danceId, sessionIndex)] || DEFAULT_ROOM_LABEL;
-}
-
 function applyLocalUnschedule(danceId, practiceId, sessionIndex) {
   delete state.confirmedSessionDrafts[practiceId];
-  if (danceId && sessionIndex) {
-    delete state.sessionLocationOverrides[practiceKey(danceId, sessionIndex)];
-  }
 
   state.calendarOverview.practice_sessions = (state.calendarOverview.practice_sessions || []).filter(
     (session) => session.id !== practiceId,
@@ -1782,6 +1757,19 @@ function getConflictText(recommendation) {
     .filter(Boolean);
 
   return unavailable.length ? unavailable.join(", ") : "None";
+}
+
+function getMissingRequiredWarning(recommendation) {
+  const missingRequired = (recommendation.missing_required_user_ids || [])
+    .map((userId) => getUserById(userId)?.display_name)
+    .filter(Boolean);
+  if (!missingRequired.length) {
+    return "";
+  }
+  if (missingRequired.length === 1) {
+    return `⚠️ ${missingRequired[0]} is not available at this time`;
+  }
+  return `⚠️ ${missingRequired.join(", ")} are not available at this time`;
 }
 
 function getReasonText(recommendation) {

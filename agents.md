@@ -106,6 +106,8 @@ Always verify:
 - coverage checks are correct
 - candidate generation respects the scheduling horizon
 - daily scheduling windows are interpreted consistently
+- candidate generation is limited to 8:00 AM to 12:00 AM in organizer local time
+- 12:00 AM to 8:00 AM is a hard forbidden window for candidate generation
 - required participants are a hard gate
 - optional participants affect score only
 - ranking is deterministic
@@ -151,6 +153,10 @@ Unless explicitly changed, use these scoring rules:
 
 Scoring behavior:
 - preference scoring is cumulative across categories
+- time-tier scoring must strongly prioritize evening practices:
+  - 6:00 PM to 10:00 PM (best)
+  - 4:00 PM to 6:00 PM and 10:00 PM to 12:00 AM
+  - 8:00 AM to 4:00 PM (lowest valid tier)
 - cap to one weekday signal and one time-range signal per user
 - tie-breakers:
   1. higher total score

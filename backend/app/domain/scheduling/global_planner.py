@@ -21,7 +21,7 @@ BACK_TO_BACK_PENALTY = -0.5
 FALLBACK_MISSING_REQUIRED_PENALTY = -2.5
 BACK_TO_BACK_WINDOW = timedelta(minutes=15)
 PRACTICE_WINDOW_START_LOCAL = time(8, 0)
-PRACTICE_WINDOW_END_LOCAL = time(12, 0)
+PRACTICE_WINDOW_END_LOCAL = time(0, 0)
 
 logger = logging.getLogger(__name__)
 
@@ -227,8 +227,9 @@ def build_ranked_recommendations(
         allowed_missing_required=0,
     )
     candidates = primary_candidates
-    if not candidates:
-        candidates = _build_candidates(
+    fallback_candidates: list[PlanningRecommendation] = []
+    if len(candidates) < max_results:
+        fallback_candidates = _build_candidates(
             event=event,
             session_index=session_index,
             reservations=reservations,
@@ -236,12 +237,14 @@ def build_ranked_recommendations(
             planning_horizon_start=planning_horizon_start,
             planning_horizon_end=planning_horizon_end,
             slot_step_minutes=slot_step_minutes,
-            allowed_missing_required=1,
+            allowed_missing_required=None,
+            require_missing_required=True,
         )
+    candidates = candidates + fallback_candidates
 
     ranked = sorted(
         candidates,
-        key=lambda item: (item.start_at, -item.total_score, -item.optional_available_count),
+        key=lambda item: (-item.total_score, -item.optional_available_count, item.start_at),
     )[:max_results]
     for index, item in enumerate(ranked, start=1):
         item.rank = index
@@ -256,7 +259,8 @@ def _build_candidates(
     planning_horizon_start: datetime,
     planning_horizon_end: datetime,
     slot_step_minutes: int,
-    allowed_missing_required: int,
+    allowed_missing_required: int | None,
+    require_missing_required: bool = False,
 ) -> list[PlanningRecommendation]:
     candidate_options, candidate_starts_count, rejection_counts = _build_candidate_options(
         event=event,
@@ -267,6 +271,7 @@ def _build_candidates(
         planning_horizon_end=planning_horizon_end,
         slot_step_minutes=slot_step_minutes,
         allowed_missing_required=allowed_missing_required,
+        require_missing_required=require_missing_required,
     )
     recommendations: list[PlanningRecommendation] = []
     rejection_counts["no_valid_remaining_sequence"] = 0
@@ -343,7 +348,8 @@ def _build_candidate_options(
     planning_horizon_start: datetime,
     planning_horizon_end: datetime,
     slot_step_minutes: int,
-    allowed_missing_required: int,
+    allowed_missing_required: int | None,
+    require_missing_required: bool = False,
 ) -> tuple[list[CandidateOption], int, dict[str, int]]:
     prior_session_end, later_session_start = _same_dance_session_bounds(
         event=event,
@@ -411,16 +417,16 @@ def _build_candidate_options(
             rejection_counts["room_conflict"] += 1
             continue
 
-        base_result = score_slot(slot, adjusted_participants)
+        base_result = score_slot(slot, adjusted_participants, timezone_name=event.organizer_timezone)
         missing_required_user_ids = sorted(
             status.user_id
             for status in base_result.participant_statuses
             if status.role == "required" and not status.available
         )
-        if len(missing_required_user_ids) > allowed_missing_required:
+        if allowed_missing_required is not None and len(missing_required_user_ids) > allowed_missing_required:
             rejection_counts["missing_required_over_limit"] += 1
             continue
-        if allowed_missing_required == 1 and len(missing_required_user_ids) != 1:
+        if require_missing_required and len(missing_required_user_ids) == 0:
             rejection_counts["fallback_wrong_missing_required_count"] += 1
             continue
         options.append(
@@ -467,7 +473,8 @@ def _can_complete_remaining_sessions(
             planning_horizon_start=planning_horizon_start,
             planning_horizon_end=planning_horizon_end,
             slot_step_minutes=slot_step_minutes,
-            allowed_missing_required=1,
+            allowed_missing_required=None,
+            require_missing_required=True,
         )
 
     for option in candidate_options:
@@ -619,6 +626,7 @@ def _build_scoring_metadata(
     score_breakdown = {
         "optional_attendees": round(float(base_score_breakdown.get("optional_attendees", 0.0)), 2),
         "preference_bonus": round(float(base_score_breakdown.get("preference_bonus", 0.0)), 2),
+        "time_tier_bonus": round(float(base_score_breakdown.get("time_tier_bonus", 0.0)), 2),
         "organizer_preference_bonus": round(organizer_preference_bonus, 2),
         "late_night_penalty": round(late_night_penalty, 2),
         "same_day_penalty": same_day_penalty,
@@ -660,6 +668,14 @@ def _build_scoring_metadata(
                 "score": round(score_breakdown["preference_bonus"], 2),
             }
         )
+    if score_breakdown["time_tier_bonus"]:
+        reasons.append(
+            {
+                "code": "time_tier_bonus",
+                "message": "This slot falls in a preferred time-of-day tier.",
+                "score": round(score_breakdown["time_tier_bonus"], 2),
+            }
+        )
     if score_breakdown["organizer_preference_bonus"]:
         reasons.append(
             {
@@ -694,9 +710,9 @@ def _build_scoring_metadata(
         )
 
     summary = (
-        "Fallback option within the 8:00 AM to 12:00 PM practice window with one missing required participant."
+        "Fallback option within the 8:00 AM to 12:00 AM practice window with one or more missing required participants."
         if missing_required_user_ids
-        else "Recommended practice within the 8:00 AM to 12:00 PM window with all required participants available."
+        else "Recommended practice within the 8:00 AM to 12:00 AM window with all required participants available."
     )
     explanation = {
         "summary": summary,

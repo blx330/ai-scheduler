@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 def _validate_timezone_aware(value: datetime) -> datetime:
@@ -99,15 +99,66 @@ class PlanningRunRead(BaseModel):
 
 
 class PlanningRunConfirmRequest(BaseModel):
-    result_ids: list[UUID]
+    result_ids: list[UUID] = Field(default_factory=list)
+    confirmations: list["PlanningResultConfirmation"] = Field(default_factory=list)
 
     @field_validator("result_ids")
     @classmethod
     def validate_result_ids(cls, value: list[UUID]) -> list[UUID]:
-        if not value:
-            raise ValueError("At least one planning result id is required")
         if len(set(value)) != len(value):
             raise ValueError("Planning result ids must be unique")
+        return value
+
+    @field_validator("confirmations")
+    @classmethod
+    def validate_confirmations(cls, value: list["PlanningResultConfirmation"]) -> list["PlanningResultConfirmation"]:
+        confirmation_ids = [item.result_id for item in value]
+        if len(set(confirmation_ids)) != len(confirmation_ids):
+            raise ValueError("Confirmation result ids must be unique")
+        return value
+
+    @property
+    def confirmed_result_ids(self) -> list[UUID]:
+        if self.confirmations:
+            return [item.result_id for item in self.confirmations]
+        return self.result_ids
+
+    @property
+    def manual_time_overrides(self) -> dict[UUID, tuple[datetime, datetime]]:
+        overrides: dict[UUID, tuple[datetime, datetime]] = {}
+        for item in self.confirmations:
+            if item.start_at is None or item.end_at is None:
+                continue
+            overrides[item.result_id] = (item.start_at, item.end_at)
+        return overrides
+
+    @model_validator(mode="after")
+    def validate_presence(self) -> "PlanningRunConfirmRequest":
+        if not self.confirmed_result_ids:
+            raise ValueError("At least one planning result id is required")
+        return self
+
+
+class PlanningResultConfirmation(BaseModel):
+    result_id: UUID
+    start_at: Optional[datetime] = None
+    end_at: Optional[datetime] = None
+
+    @field_validator("start_at", "end_at")
+    @classmethod
+    def validate_datetimes(cls, value: Optional[datetime]) -> Optional[datetime]:
+        if value is None:
+            return value
+        return _validate_timezone_aware(value)
+
+    @field_validator("end_at")
+    @classmethod
+    def validate_end_after_start(cls, value: Optional[datetime], info):
+        if value is None:
+            return value
+        start_at = info.data.get("start_at")
+        if start_at is not None and value <= start_at:
+            raise ValueError("Confirmation end must be after start")
         return value
 
 

@@ -57,7 +57,8 @@ def confirm_planning_results(
     try:
         run, confirmed_sessions = PlanningService(db).confirm_results(
             run_id,
-            payload.result_ids,
+            payload.confirmed_result_ids,
+            manual_time_overrides=payload.manual_time_overrides,
             google_calendar_service=GoogleCalendarService(db, settings, client),
         )
     except ValueError as exc:
