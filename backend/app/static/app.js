@@ -572,12 +572,16 @@ function renderPracticeRow(danceId, practice) {
 }
 
 function renderParticipants() {
-  if (!state.users.length) {
-    participantsList.innerHTML = renderEmptyState("No participants", "Add participant to manage calendars and overlays.");
+  const connectedUsers = state.users.filter((user) => Boolean(state.connections[user.id]?.connected));
+  if (!connectedUsers.length) {
+    participantsList.innerHTML = renderEmptyState(
+      "No participants",
+      "Connect Google Calendar for at least one person to show participant overlays.",
+    );
     return;
   }
 
-  participantsList.innerHTML = state.users
+  participantsList.innerHTML = connectedUsers
     .slice()
     .sort((left, right) => left.display_name.localeCompare(right.display_name))
     .map((user) => {
