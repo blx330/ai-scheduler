@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Protocol
+import logging
+from typing import Any, Optional, Protocol
 from urllib.parse import quote, urlencode
 
 
@@ -17,14 +18,15 @@ GOOGLE_SCOPE_CALENDAR_READONLY = "https://www.googleapis.com/auth/calendar.reado
 GOOGLE_SCOPES = [
     GOOGLE_SCOPE_CALENDAR,
 ]
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class GoogleOAuthTokens:
     access_token: str
-    refresh_token: str | None
+    refresh_token: Optional[str]
     expires_at: datetime
-    scope: str | None = None
+    scope: Optional[str] = None
     token_type: str = "Bearer"
 
 
@@ -34,7 +36,7 @@ class GoogleCalendarSummary:
     summary: str
     primary: bool
     access_role: str
-    time_zone: str | None
+    time_zone: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -47,7 +49,7 @@ class GoogleBusyInterval:
 @dataclass(frozen=True)
 class GoogleCreatedEvent:
     event_id: str
-    html_link: str | None
+    html_link: Optional[str]
     status: str
     calendar_id: str
     start_at: datetime
@@ -85,7 +87,7 @@ class GoogleCalendarProvider(Protocol):
         end_at: datetime,
         timezone_name: str,
         attendee_emails: list[str],
-        description: str | None = None,
+        description: Optional[str] = None,
     ) -> GoogleCreatedEvent:
         ...
 
@@ -210,7 +212,7 @@ class GoogleCalendarClient:
         end_at: datetime,
         timezone_name: str,
         attendee_emails: list[str],
-        description: str | None = None,
+        description: Optional[str] = None,
     ) -> GoogleCreatedEvent:
         encoded_calendar_id = quote(calendar_id, safe="")
         response = self._requests().post(
@@ -318,17 +320,32 @@ class GoogleCalendarClient:
 
 
 class NoopGoogleCalendarProvider:
+    def __init__(self, missing_env_vars: list[str]) -> None:
+        self.missing_env_vars = missing_env_vars
+
+    def _raise_unconfigured(self, operation: str) -> None:
+        missing_vars = ", ".join(self.missing_env_vars)
+        logger.warning(
+            "Google Calendar OAuth noop provider called for operation '%s'. Missing env vars: [%s]",
+            operation,
+            missing_vars,
+        )
+        raise RuntimeError(
+            f"Google Calendar OAuth not configured for operation '{operation}'. "
+            f"Missing env vars: [{missing_vars}]"
+        )
+
     def build_authorization_url(self, state: str) -> str:
-        raise RuntimeError("OAuth not configured - set env vars")
+        self._raise_unconfigured("build_authorization_url")
 
     def exchange_code(self, code: str) -> GoogleOAuthTokens:
-        raise RuntimeError("OAuth not configured - set env vars")
+        self._raise_unconfigured("exchange_code")
 
     def refresh_access_token(self, refresh_token: str) -> GoogleOAuthTokens:
-        raise RuntimeError("OAuth not configured - set env vars")
+        self._raise_unconfigured("refresh_access_token")
 
     def list_calendars(self, access_token: str) -> list[GoogleCalendarSummary]:
-        return []
+        self._raise_unconfigured("list_calendars")
 
     def get_free_busy(
         self,
@@ -337,7 +354,7 @@ class NoopGoogleCalendarProvider:
         time_min: datetime,
         time_max: datetime,
     ) -> list[GoogleBusyInterval]:
-        return []
+        self._raise_unconfigured("get_free_busy")
 
     def create_event(
         self,
@@ -348,9 +365,9 @@ class NoopGoogleCalendarProvider:
         end_at: datetime,
         timezone_name: str,
         attendee_emails: list[str],
-        description: str | None = None,
+        description: Optional[str] = None,
     ) -> GoogleCreatedEvent:
-        raise RuntimeError("OAuth not configured - set env vars")
+        self._raise_unconfigured("create_event")
 
     def delete_event(
         self,
@@ -358,17 +375,28 @@ class NoopGoogleCalendarProvider:
         calendar_id: str,
         event_id: str,
     ) -> None:
-        raise RuntimeError("OAuth not configured - set env vars")
+        self._raise_unconfigured("delete_event")
 
 
 def build_google_calendar_client(
-    client_id: str,
-    client_secret: str,
-    redirect_uri: str,
+    client_id: Optional[str],
+    client_secret: Optional[str],
+    redirect_uri: Optional[str],
 ) -> GoogleCalendarProvider:
-    if client_id and client_secret and redirect_uri:
+    missing_env_vars = []
+    if not client_id or not client_id.strip():
+        missing_env_vars.append("GOOGLE_CLIENT_ID")
+    if not client_secret or not client_secret.strip():
+        missing_env_vars.append("GOOGLE_CLIENT_SECRET")
+    if not redirect_uri or not redirect_uri.strip():
+        missing_env_vars.append("GOOGLE_REDIRECT_URI")
+    if not missing_env_vars:
         return GoogleCalendarClient(client_id=client_id, client_secret=client_secret, redirect_uri=redirect_uri)
-    return NoopGoogleCalendarProvider()
+    logger.warning(
+        "Google Calendar OAuth not configured. Missing env vars: [%s]. Calendar sync will be disabled.",
+        ", ".join(missing_env_vars),
+    )
+    return NoopGoogleCalendarProvider(missing_env_vars=missing_env_vars)
 
 
 def _parse_google_datetime(value: str) -> datetime:

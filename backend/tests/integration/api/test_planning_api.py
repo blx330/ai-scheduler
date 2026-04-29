@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from app.infrastructure.db.models import CalendarConnection
 from app.infrastructure.integrations.google_calendar.client import GoogleCreatedEvent
@@ -790,8 +791,8 @@ def _create_user(
     client,
     display_name: str,
     email: str,
-    preferred_practice_time: str | None = None,
-    preferred_practice_time_raw: str | None = None,
+    preferred_practice_time: Optional[str] = None,
+    preferred_practice_time_raw: Optional[str] = None,
 ) -> dict:
     payload = {
         "display_name": display_name,
@@ -827,7 +828,7 @@ def _create_event(
     latest_schedule_at: str,
     required_session_count: int,
     participants: list[dict],
-    earliest_start_date: str | None = None,
+    earliest_start_date: Optional[str] = None,
     min_days_apart: int = 0,
 ) -> dict:
     response = client.post(

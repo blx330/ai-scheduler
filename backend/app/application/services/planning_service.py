@@ -111,8 +111,8 @@ class PlanningService:
         self,
         run_id: UUID,
         result_ids: list[UUID],
-        manual_time_overrides: dict[UUID, tuple[datetime, datetime]] | None = None,
-        google_calendar_service: GoogleCalendarService | None = None,
+        manual_time_overrides: Optional[dict[UUID, tuple[datetime, datetime]]] = None,
+        google_calendar_service: Optional[GoogleCalendarService] = None,
     ) -> tuple[PlanningRun, list[PracticeSession]]:
         run = self.get_planning_run(run_id)
         if run is None:
@@ -507,7 +507,7 @@ class PlanningService:
             )
         return reservations
 
-    def _get_or_create_room(self, room_id: UUID | None) -> Room:
+    def _get_or_create_room(self, room_id: Optional[UUID]) -> Room:
         if room_id is not None:
             room = self.db.get(Room, room_id)
             if room is None or not room.is_active:
@@ -559,7 +559,7 @@ def _count_confirmed_sessions(practice_sessions: list[PracticeSession]) -> int:
 
 def _validate_result_against_event_constraints(
     result: PlanningRunResult,
-    start_at: datetime | None,
+    start_at: Optional[datetime],
     selected_starts: list[date],
 ) -> None:
     dance_event = result.dance_event

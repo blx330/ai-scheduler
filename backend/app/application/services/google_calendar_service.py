@@ -50,10 +50,10 @@ class GoogleConnectionStatus:
     user_id: UUID
     connected: bool
     status: str
-    account_email: str | None
+    account_email: Optional[str]
     selected_busy_calendar_ids: list[str]
-    selected_write_calendar_id: str | None
-    token_expires_at: datetime | None
+    selected_write_calendar_id: Optional[str]
+    token_expires_at: Optional[datetime]
 
 
 @dataclass(frozen=True)
@@ -91,6 +91,9 @@ class GoogleCalendarService:
         connection.refresh_token = tokens.refresh_token or connection.refresh_token
         connection.token_expires_at = ensure_utc(tokens.expires_at)
         connection.scopes = tokens.scope
+        # TODO: fetch actual Google account email from
+        # https://www.googleapis.com/oauth2/v1/userinfo using the access token
+        # For now we use the app user email as a best-effort approximation.
         connection.account_email = user.email
         self.db.add(connection)
         self.db.commit()
@@ -112,7 +115,7 @@ class GoogleCalendarService:
             )
         connected = bool(connection.refresh_token or connection.access_token)
         status = connection.status
-        if connected and not _has_any_scope(connection.scopes, GOOGLE_READ_SCOPES):
+        if connected and connection.scopes is not None and not _has_any_scope(connection.scopes, GOOGLE_READ_SCOPES):
             connected = False
             status = "reauthorization_required"
         return GoogleConnectionStatus(
@@ -139,7 +142,7 @@ class GoogleCalendarService:
         self,
         user_id: UUID,
         busy_calendar_ids: list[str],
-        write_calendar_id: str | None,
+        write_calendar_id: Optional[str],
     ) -> GoogleConnectionStatus:
         connection = self._require_connection(user_id)
         available_ids = {calendar.id for calendar in self.list_calendars(user_id)}
@@ -171,6 +174,12 @@ class GoogleCalendarService:
         calendar_ids = list(connection.selected_busy_calendar_ids_json or [])
         if not calendar_ids:
             calendar_ids = [connection.selected_write_calendar_id or "primary"]
+        if calendar_ids == ["primary"]:
+            logger.warning(
+                "sync_busy_intervals for user %s: no calendars explicitly selected, "
+                "falling back to 'primary'. Have the user complete calendar selection.",
+                user_id,
+            )
 
         start_at = ensure_utc(horizon_start)
         end_at = ensure_utc(horizon_end)
@@ -225,7 +234,7 @@ class GoogleCalendarService:
     def create_event_for_practice_session(
         self,
         practice_session_id: UUID,
-        calendar_id: str | None = None,
+        calendar_id: Optional[str] = None,
     ) -> GoogleCreatedEvent:
         practice_session = self.db.scalars(
             select(PracticeSession)
@@ -349,14 +358,24 @@ class GoogleCalendarService:
         raise ValueError(error_message)
 
 
-def _sign_state(payload: dict[str, str], secret: str) -> str:
+def _sign_state(payload: dict[str, str], secret: Optional[str]) -> str:
+    if not secret:
+        raise RuntimeError(
+            "OAUTH_STATE_SECRET env var is not set. "
+            "Set it to a long random string (e.g. openssl rand -hex 32)."
+        )
     encoded_payload = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8").rstrip("=")
     signature = hmac.new(secret.encode("utf-8"), encoded_payload.encode("utf-8"), hashlib.sha256).digest()
     encoded_signature = base64.urlsafe_b64encode(signature).decode("utf-8").rstrip("=")
     return f"{encoded_payload}.{encoded_signature}"
 
 
-def _verify_state(token: str, secret: str) -> dict[str, str]:
+def _verify_state(token: str, secret: Optional[str]) -> dict[str, str]:
+    if not secret:
+        raise RuntimeError(
+            "OAUTH_STATE_SECRET env var is not set. "
+            "Set it to a long random string (e.g. openssl rand -hex 32)."
+        )
     try:
         encoded_payload, encoded_signature = token.split(".", 1)
     except ValueError as exc:
@@ -374,8 +393,8 @@ def _decode_base64(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + padding)
 
 
-def _has_any_scope(scopes: str | None, required_scopes: frozenset[str]) -> bool:
+def _has_any_scope(scopes: Optional[str], required_scopes: frozenset[str]) -> bool:
     if not scopes:
-        return False
+        return True  # Assume full grant if scope string absent (OAuth spec allows this)
     granted_scopes = {scope.strip() for scope in scopes.split() if scope.strip()}
     return bool(granted_scopes & required_scopes)

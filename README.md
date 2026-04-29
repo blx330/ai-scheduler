@@ -1,116 +1,147 @@
-# AI Scheduler Demo MVP
+# AI Scheduler
 
-Minimal scheduling app with:
+I built this as a backend-first scheduling project to practice real scheduling logic, not just CRUD.
 
-- FastAPI backend
-- SQLAlchemy + Alembic persistence
-- Deterministic scheduling engine
-- Real Google Calendar OAuth
-- Real busy-time sync from connected calendars
-- Manual slot confirmation
-- Real Google Calendar event creation
-- Single-page frontend served directly by FastAPI
+At a high level, it does three things:
+- stores users, events, and manual availability
+- pulls busy time from Google Calendar (when connected)
+- generates and ranks feasible practice slots with deterministic scoring
 
-## What works
+The API and a small demo UI are both served by FastAPI from the same process (`backend/app/main.py` mounts `backend/app/static`).
 
-Happy-path demo flow:
+## What the project does right now
 
-1. Create app users in the UI
-2. Connect each user to Google Calendar
-3. Choose source calendars for busy-time sync
-4. Choose the organizer write calendar
-5. Create a scheduling request with:
-   - title
-   - required attendees
-   - duration
-   - must-schedule-before datetime
-   - preferred weekdays
-   - preferred time window
-6. Sync busy intervals for connected attendees
-7. Rank the top 3 feasible slots
-8. Confirm one slot
-9. Create the Google Calendar event
+Current flow:
+1. Create users
+2. Add manual availability (explicit free intervals)
+3. Optionally connect Google Calendar and sync busy intervals
+4. Create events with required participants
+5. Run planning (`/api/v1/planning-runs`) to get top recommendations
+6. Confirm selected results and optionally create Google Calendar events
 
-Notes:
+Scheduling behavior in this codebase:
+- required attendees are hard constraints
+- optional attendees are score modifiers
+- candidate generation is limited to 8:00 AM -> 12:00 AM in organizer local time
+- 12:00 AM -> 8:00 AM is a hard forbidden window
+- ranking is deterministic (score, then tie-breakers)
 
-- The old freeform parser still exists, but the demo flow uses structured preferences from the UI for stability.
-- Required attendees are the only attendee type used in the UI.
-- Busy-time sync uses real Google Calendar data.
-- Event creation uses the organizer's selected write calendar.
-- Candidate generation is restricted to 8:00 AM to 12:00 AM in the organizer timezone.
-- 12:00 AM to 8:00 AM is a hard forbidden window and never produces candidates.
+## Code structure (actual repo layout)
 
-## Repo layout
+### Root
+- `backend/` - main Python app
+- `infra/compose.yaml` - local Docker Compose (Postgres + API service)
+- `.env.example` - sample env file used for local setup
+- `PROJECT_SNAPSHOT_2026-04-10.md` - project snapshot notes
 
-- `backend/app/api`: HTTP routes and schemas
-- `backend/app/application/services`: orchestration and Google Calendar flow
-- `backend/app/domain`: scheduling logic and scoring
-- `backend/app/infrastructure`: DB, config, parser, Google client
-- `backend/app/static`: demo frontend
+### Backend app
+- `backend/app/main.py` - app bootstrap, dependency wiring, router registration, static UI mount
+- `backend/app/api/` - FastAPI layer (routes, request/response schemas, dependency helpers)
+  - `routers/` - endpoints (`users`, `events`, `planning`, `availability`, `practices`, `google_calendar`, `health`)
+  - `schemas/` - Pydantic API contracts
+  - `deps.py` - shared request dependencies (db session, settings, integrations)
+- `backend/app/application/services/` - use-case orchestration
+  - `planning_service.py` - planning run orchestration + confirmation flow
+  - `google_calendar_service.py` - OAuth, sync, event create/delete behavior
+  - `user_service.py`, `event_service.py`, `availability_service.py` - domain workflow + persistence coordination
+- `backend/app/domain/` - framework-independent scheduling logic
+  - `scheduling/` - candidate generation, scoring, global planner
+  - `availability/` - interval operations and availability semantics
+  - `preferences/` - preference models/normalization
+  - `common/` - shared domain utilities
+- `backend/app/infrastructure/` - config, DB models/session, external adapters
+  - `config.py` - env-backed settings
+  - `db/` - SQLAlchemy models + session/base/types
+  - `integrations/google_calendar/client.py` - Google Calendar HTTP client
+  - `integrations/llm/profile_preference_parser.py` - free-text preference parser (stub or Groq-backed)
+- `backend/app/static/` - demo frontend assets served by FastAPI
 
-## Google Cloud setup
+### Database and migrations
+- `backend/alembic.ini` - Alembic config
+- `backend/alembic/versions/` - migration history
 
-1. Open Google Cloud Console.
-2. Create or choose a project.
-3. Enable the Google Calendar API.
-4. Configure the OAuth consent screen.
-5. Create an OAuth Client ID for a Web application.
-6. Add this authorized redirect URI:
+### Tests
+- `backend/tests/integration/api/` - API integration tests
+- `backend/tests/unit/domain/` - scheduling and interval unit tests
+- `backend/tests/unit/infrastructure/` - integration client unit tests
+- `backend/tests/conftest.py` - shared test setup/fixtures
 
-```text
-http://localhost:8000/api/v1/google/oauth/callback
-```
+## Requirements
 
-7. Copy the client ID and client secret into `.env`.
+- Python `3.12` (matches `backend/Dockerfile`)
+- Docker + Docker Compose (for local Postgres, and optional full Docker run)
 
-If Google OAuth succeeds but busy sync returns a `403` from `/calendar/v3/freeBusy`, the usual cause is that the Google Calendar API is still disabled for the OAuth project. Enable it in Google Cloud Console and wait a few minutes for propagation before retrying.
+No Node.js setup is required for local development in this repo.
 
-## Environment
+## Environment variables
 
-Create `.env` from the example:
+Create your local env file:
 
 ```bash
 cp .env.example .env
 ```
 
-Required variables:
+For the default Docker DB flow in this README, make sure `.env` has:
 
+```env
+DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/scheduler
+```
+
+Variables currently read by backend settings (`backend/app/infrastructure/config.py`):
 - `DATABASE_URL`
-- `PARSER_MODE`
 - `APP_BASE_URL`
 - `FRONTEND_URL`
-- `OAUTH_STATE_SECRET`
-- `GOOGLE_CLIENT_ID`
-- `GOOGLE_CLIENT_SECRET`
-- `GOOGLE_REDIRECT_URI`
+- `GROQ_API_KEY` (optional; if set, Groq parser is used)
+- `OAUTH_STATE_SECRET` (needed for Google OAuth flow)
+- `GOOGLE_CLIENT_ID` (needed for Google OAuth flow)
+- `GOOGLE_CLIENT_SECRET` (needed for Google OAuth flow)
+- `GOOGLE_REDIRECT_URI` (needed for Google OAuth flow)
 
-For the demo, keep:
+Notes:
+- `.env.example` also includes `PARSER_MODE` and `FEATHER_API_KEY`, but those are not currently consumed by `Settings`.
+- If Google OAuth env vars are missing, core scheduling still runs, but Google connection/sync/event creation will not.
+
+### Google Calendar OAuth setup (required for Connect Google Calendar)
+
+1. Go to Google Cloud Console and create/select a project.
+2. Enable the Google Calendar API.
+3. Configure OAuth consent screen.
+4. Create an OAuth Client ID (Web application).
+5. Add this redirect URI exactly:
 
 ```text
-PARSER_MODE=stub
-APP_BASE_URL=http://localhost:8000
-FRONTEND_URL=http://localhost:8000
+http://localhost:8000/api/v1/google/oauth/callback
+```
+
+6. Put your values in `.env`:
+
+```env
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-client-secret
 GOOGLE_REDIRECT_URI=http://localhost:8000/api/v1/google/oauth/callback
 ```
 
-Google Calendar OAuth will not work unless all of these are set:
+7. Restart the API after editing `.env`.
 
-- `OAUTH_STATE_SECRET`
-- `GOOGLE_CLIENT_ID`
-- `GOOGLE_CLIENT_SECRET`
-- `GOOGLE_REDIRECT_URI`
+## Install and run (local)
 
-If those values are missing, the UI will surface: `OAuth not configured - set env vars`.
+### 1) Start Postgres
 
-## Local run
-
-### 1. Start PostgreSQL
+From repo root:
 
 ```bash
 docker compose -f infra/compose.yaml up -d db
 ```
 
-### 2. Install backend dependencies
+Wait until Postgres is healthy before running migrations:
+
+```bash
+docker compose -f infra/compose.yaml logs db
+```
+
+Look for a line like `database system is ready to accept connections`.
+
+### 2) Install Python dependencies
 
 ```bash
 cd backend
@@ -120,85 +151,63 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements/dev.txt
 ```
 
-### 3. Run migrations
+### 3) Run DB migrations
 
-From the API container:
-
-```bash
-cd /Users/chas/Documents/ai scheduler
-docker compose -f infra/compose.yaml run --rm api alembic upgrade head
-```
-
-Or locally from `backend/` with a host-reachable `DATABASE_URL`:
+From `backend/` with your venv active:
 
 ```bash
-export DATABASE_URL=postgresql+psycopg://localhost:5432/scheduler
-# If your local Postgres requires an explicit role, use your local db user.
-# Example on this machine:
-# export DATABASE_URL=postgresql+psycopg://chas@localhost:5432/scheduler
 alembic upgrade head
 ```
 
-### 4. Run the app
+If you get `fe_sendauth: no password supplied`, your `DATABASE_URL` in `.env` is missing credentials. Set it to:
+
+```env
+DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/scheduler
+```
+
+### 4) Run the app
+
+From `backend/` with the venv active:
 
 ```bash
-cd backend
-source .venv_local/bin/activate
-export DATABASE_URL=postgresql+psycopg://localhost:5432/scheduler
-# If your local Postgres requires an explicit role, use your local db user.
-# Example on this machine:
-# export DATABASE_URL=postgresql+psycopg://chas@localhost:5432/scheduler
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 Open:
+- `http://localhost:8000/` (demo UI)
+- `http://localhost:8000/docs` (FastAPI docs)
 
-```text
-http://localhost:8000/
+If you see `ModuleNotFoundError` errors around app imports, make sure you're in `backend/` and your venv is active:
+
+```bash
+cd backend
+source .venv_local/bin/activate
+alembic upgrade head
 ```
 
-There is no separate frontend server.
+## Run with Docker instead (API + DB)
 
-## Docker run
-
-If you want to run the API inside Docker:
+From repo root:
 
 ```bash
 docker compose -f infra/compose.yaml up --build
 ```
 
-The UI is still served from:
-
-```text
-http://localhost:8000/
-```
+This uses:
+- Postgres on `5432`
+- API/UI on `http://localhost:8000`
 
 ## Tests
 
-Run the full backend suite:
+From `backend/` with your venv active:
 
 ```bash
-cd backend
-source .venv_local/bin/activate
 PYTHONPYCACHEPREFIX=/tmp/pycache PYTHONPATH=. python -m pytest -q
 ```
 
-## Demo checklist
+## Current limitations
 
-1. Create at least two users with real email addresses.
-2. Click `Connect Google Calendar` on each member card and finish the OAuth flow.
-3. Click `Refresh calendars` and save the source/write calendar choices.
-4. Pick an organizer.
-5. Check required attendees.
-6. Enter title, duration, deadline, preferred weekdays, and preferred hours.
-7. Click `Find top 3 slots`.
-8. Click `Confirm and create event` on one result.
-9. Open the returned Google Calendar event link.
-
-## Current scope limits
-
-- No authentication system beyond user records in the demo
-- No recurring availability
-- No production token encryption/hardening
-- No same-title minimum-gap rule yet
-- No background jobs; sync happens inline during the demo flow
+- no auth/permissions system yet
+- no recurring availability support
+- no background jobs (sync/planning work happens inline)
+- Google integration is functional for demo/dev, but not hardened as production OAuth infra

@@ -1,4 +1,5 @@
 import logging
+from typing import Optional, Union
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -17,7 +18,7 @@ class UserService:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def create_user(self, payload: UserCreate, preference_parser: UserProfilePreferenceParser | None = None) -> User:
+    def create_user(self, payload: UserCreate, preference_parser: Optional[UserProfilePreferenceParser] = None) -> User:
         existing_by_email = self._find_user_by_email(payload.email)
         if existing_by_email is not None:
             if self._is_registration_incomplete(existing_by_email):
@@ -50,7 +51,7 @@ class UserService:
     def get_user(self, user_id):
         return self.db.get(User, user_id)
 
-    def _find_user_by_email(self, email: str | None) -> User | None:
+    def _find_user_by_email(self, email: Optional[str]) -> Optional[User]:
         if not email:
             return None
         normalized = email.strip()
@@ -72,7 +73,7 @@ class UserService:
         self,
         user: User,
         payload: UserCreate,
-        preference_parser: UserProfilePreferenceParser | None = None,
+        preference_parser: Optional[UserProfilePreferenceParser] = None,
     ) -> None:
         user.display_name = payload.display_name
         user.timezone = payload.timezone
@@ -86,8 +87,8 @@ class UserService:
         self,
         user_id,
         payload: UserUpdate,
-        preference_parser: UserProfilePreferenceParser | None = None,
-    ) -> User | None:
+        preference_parser: Optional[UserProfilePreferenceParser] = None,
+    ) -> Optional[User]:
         user = self.db.get(User, user_id)
         if user is None:
             return None
@@ -127,8 +128,8 @@ class UserService:
 
 def _apply_user_practice_preferences(
     user: User,
-    payload: UserCreate | UserUpdate,
-    preference_parser: UserProfilePreferenceParser | None,
+    payload: Union[UserCreate, UserUpdate],
+    preference_parser: Optional[UserProfilePreferenceParser],
 ) -> None:
     if "preferred_practice_time" in payload.model_fields_set:
         user.preferred_practice_time = payload.preferred_practice_time.value if payload.preferred_practice_time else None

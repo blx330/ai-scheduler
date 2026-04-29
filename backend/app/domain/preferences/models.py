@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -154,7 +154,7 @@ def merge_parsed_preferences(
 def merge_preferred_practice_time(
     preference: Optional[ParsedPreference],
     timezone_name: str,
-    preferred_practice_time: Optional[PreferredPracticeTime | str],
+    preferred_practice_time: Optional[Union[PreferredPracticeTime, str]],
 ) -> Optional[ParsedPreference]:
     if preferred_practice_time is None:
         return preference
@@ -251,7 +251,7 @@ def _merge_weekdays(base_weekdays: list[Weekday], overlay_weekdays: list[Weekday
     return merged
 
 
-def _normalize_day_name(value: object) -> str | None:
+def _normalize_day_name(value: object) -> Optional[str]:
     if value is None:
         return None
     token = str(value).strip().lower()
