@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from typing import Optional
 from uuid import UUID
 
 from app.api.schemas.events import DanceEventParticipantRead, DanceEventRead
@@ -140,7 +141,7 @@ def _optional_available_count(participant_statuses_json: list[dict]) -> int:
     return sum(1 for item in participant_statuses_json if item.get("role") == "optional" and item.get("available"))
 
 
-def _planning_run_message(run: PlanningRun) -> str | None:
+def _planning_run_message(run: PlanningRun) -> Optional[str]:
     if run.status == "no_results":
         return "No availability found between 8:00 AM and 12:00 AM."
     return None

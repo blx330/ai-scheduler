@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 import logging
-from typing import Any
+from typing import Any, Optional, Tuple
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -32,9 +32,9 @@ class PlanningEventInput:
     dance_name: str
     organizer_user_id: UUID
     organizer_timezone: str
-    organizer_preference: ParsedPreference | None
+    organizer_preference: Optional[ParsedPreference]
     duration_minutes: int
-    earliest_start_date: date | None
+    earliest_start_date: Optional[date]
     min_days_apart: int
     latest_schedule_at: datetime
     next_session_index: int
@@ -58,8 +58,8 @@ class SessionReservation:
     end_at: datetime
     room_id: UUID
     participant_user_ids: frozenset[UUID]
-    dance_event_id: UUID | None = None
-    session_index: int | None = None
+    dance_event_id: Optional[UUID] = None
+    session_index: Optional[int] = None
 
 
 @dataclass
@@ -259,7 +259,7 @@ def _build_candidates(
     planning_horizon_start: datetime,
     planning_horizon_end: datetime,
     slot_step_minutes: int,
-    allowed_missing_required: int | None,
+    allowed_missing_required: Optional[int],
     require_missing_required: bool = False,
 ) -> list[PlanningRecommendation]:
     candidate_options, candidate_starts_count, rejection_counts = _build_candidate_options(
@@ -348,7 +348,7 @@ def _build_candidate_options(
     planning_horizon_start: datetime,
     planning_horizon_end: datetime,
     slot_step_minutes: int,
-    allowed_missing_required: int | None,
+    allowed_missing_required: Optional[int],
     require_missing_required: bool = False,
 ) -> tuple[list[CandidateOption], int, dict[str, int]]:
     prior_session_end, later_session_start = _same_dance_session_bounds(
@@ -518,9 +518,9 @@ def _same_dance_session_bounds(
     event: PlanningEventInput,
     session_index: int,
     reservations: list[SessionReservation],
-) -> tuple[datetime | None, datetime | None]:
-    prior_session_end: datetime | None = None
-    later_session_start: datetime | None = None
+) -> Tuple[Optional[datetime], Optional[datetime]]:
+    prior_session_end: Optional[datetime] = None
+    later_session_start: Optional[datetime] = None
     for reservation in reservations:
         if reservation.dance_event_id != event.dance_event_id or reservation.session_index is None:
             continue
