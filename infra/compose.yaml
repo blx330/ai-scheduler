@@ -22,7 +22,7 @@ services:
       FEATHER_API_KEY: ${FEATHER_API_KEY:-}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8000}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8000}
-      OAUTH_STATE_SECRET: ${OAUTH_STATE_SECRET:-change-me-for-demo}
+      OAUTH_STATE_SECRET: ${OAUTH_STATE_SECRET}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/v1/google/oauth/callback}

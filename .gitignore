@@ -5,6 +5,7 @@
 # virtual environments
 .venv/
 .venv_local/
+.venv_verify/
 
 # python cache
 __pycache__/
