@@ -20,7 +20,7 @@ Current flow:
 6. Confirm selected results and optionally create Google Calendar events
 
 Scheduling behavior in this codebase:
-- required attendees are hard constraints
+- required attendees are a hard constraint for primary recommendations; if not enough fully-feasible options exist, fallback suggestions may include missing required attendees
 - optional attendees are score modifiers
 - candidate generation is limited to 8:00 AM -> 12:00 AM in organizer local time
 - 12:00 AM -> 8:00 AM is a hard forbidden window
@@ -68,7 +68,8 @@ Scheduling behavior in this codebase:
 
 ## Requirements
 
-- Python `3.12` (matches `backend/Dockerfile`)
+- Python `3.11+` for local development (`backend/.venv_local` currently uses 3.11)
+- Python `3.12` in Docker (`backend/Dockerfile`)
 - Docker + Docker Compose (for local Postgres, and optional full Docker run)
 
 No Node.js setup is required for local development in this repo.
@@ -193,6 +194,12 @@ From repo root:
 docker compose -f infra/compose.yaml up --build
 ```
 
+Then run migrations in the API container before using the app:
+
+```bash
+docker compose -f infra/compose.yaml exec api alembic upgrade head
+```
+
 This uses:
 - Postgres on `5432`
 - API/UI on `http://localhost:8000`
@@ -211,3 +218,4 @@ PYTHONPYCACHEPREFIX=/tmp/pycache PYTHONPATH=. python -m pytest -q
 - no recurring availability support
 - no background jobs (sync/planning work happens inline)
 - Google integration is functional for demo/dev, but not hardened as production OAuth infra
+- frontend demo UI is functional, but not yet polished for usability or visual design
