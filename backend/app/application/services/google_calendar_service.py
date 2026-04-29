@@ -91,9 +91,8 @@ class GoogleCalendarService:
         connection.refresh_token = tokens.refresh_token or connection.refresh_token
         connection.token_expires_at = ensure_utc(tokens.expires_at)
         connection.scopes = tokens.scope
-        # TODO: fetch actual Google account email from
-        # https://www.googleapis.com/oauth2/v1/userinfo using the access token
-        # For now we use the app user email as a best-effort approximation.
+        # Account email currently mirrors app user email until a dedicated
+        # userinfo call is introduced.
         connection.account_email = user.email
         self.db.add(connection)
         self.db.commit()

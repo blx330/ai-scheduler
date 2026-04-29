@@ -660,14 +660,6 @@ function renderRightSidebar() {
   }
 
   const suggestions = getActiveSuggestions();
-  console.log("Suggested slot render input", {
-    selectedDanceId: state.selectedDanceId,
-    activePracticeKey: state.activePracticeKey,
-    planningStatus: state.planningRun?.status,
-    resultGroups: state.planningRun?.results?.length || 0,
-    suggestionCount: suggestions.length,
-    suggestions,
-  });
   if (!suggestions.length) {
     suggestedSlots.innerHTML = renderEmptyState(
       "Suggested Slots",
