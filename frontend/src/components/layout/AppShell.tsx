@@ -1,35 +1,34 @@
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
-import { CalendarDays, ListChecks, Sparkles, Users } from "lucide-react";
+import { CalendarDays, ListChecks, User } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
-  { to: "/members", label: "Members", icon: Users },
-  { to: "/events", label: "Events", icon: ListChecks },
-  { to: "/planning", label: "Planning", icon: Sparkles },
   { to: "/calendar", label: "Calendar", icon: CalendarDays },
+  { to: "/members", label: "Members", icon: User },
+  { to: "/events", label: "Events", icon: ListChecks },
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-svh flex flex-col md:flex-row">
-      <aside className="md:w-56 shrink-0 border-b md:border-b-0 md:border-r bg-card">
-        <div className="p-4">
-          <h1 className="text-lg font-semibold leading-tight">AI Scheduler</h1>
-          <p className="text-xs text-muted-foreground">Dance practice planning</p>
+    <div className="min-h-svh flex flex-col md:flex-row bg-background">
+      <aside className="md:w-64 shrink-0 border-b md:border-b-0 md:border-r border-black/5">
+        <div className="p-5 pb-6">
+          <div className="text-lg font-bold tracking-tight">AI Scheduler</div>
+          <div className="text-xs text-muted-foreground mt-0.5">Dance practice planning</div>
         </div>
-        <nav className="flex md:flex-col gap-1 px-2 pb-4 overflow-x-auto md:overflow-visible">
+        <nav className="flex md:flex-col gap-1 px-3 pb-4 overflow-x-auto md:overflow-visible">
           {NAV_ITEMS.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
               className={({ isActive }) =>
                 cn(
-                  "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium whitespace-nowrap transition-colors",
+                  "flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-sm font-semibold whitespace-nowrap transition-colors",
                   isActive
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                    ? "bg-secondary text-primary"
+                    : "text-foreground/65 hover:bg-accent/60",
                 )
               }
             >
@@ -39,7 +38,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           ))}
         </nav>
       </aside>
-      <main className="flex-1 min-w-0 p-4 md:p-6">{children}</main>
+      <main className="flex-1 min-w-0 p-6 md:p-8 pb-14 flex flex-col">{children}</main>
     </div>
   );
 }

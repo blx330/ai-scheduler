@@ -45,6 +45,7 @@ export const eventsApi = {
   create: (body: DanceEventCreate) => api.post<DanceEventRead>("/events", body),
   update: (id: string, body: DanceEventUpdate) => api.patch<DanceEventRead>(`/events/${id}`, body),
   sessions: (id: string) => api.get<PracticeSessionRead[]>(`/events/${id}/sessions`),
+  remove: (id: string) => api.delete<void>(`/events/${id}`),
 };
 
 export const planningApi = {

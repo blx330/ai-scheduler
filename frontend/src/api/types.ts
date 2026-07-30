@@ -145,10 +145,12 @@ export interface PlanningSessionRecommendationGroup {
   recommendations: PlanningRecommendationRead[];
 }
 
+export type PlanningRunStatus = "completed" | "no_results";
+
 export interface PlanningRunRead {
   id: string;
   room_id: string;
-  status: string;
+  status: PlanningRunStatus;
   message: string | null;
   horizon_start: string;
   horizon_end: string;
@@ -165,11 +167,9 @@ export interface PlanningRunCreate {
   room_id?: string;
 }
 
-export interface PlanningResultConfirmation {
-  result_id: string;
-  start_at?: string;
-  end_at?: string;
-}
+export type PlanningResultConfirmation =
+  | { result_id: string; start_at?: undefined; end_at?: undefined }
+  | { result_id: string; start_at: string; end_at: string };
 
 export interface PlanningRunConfirmRequest {
   confirmations: PlanningResultConfirmation[];
