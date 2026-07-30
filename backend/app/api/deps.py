@@ -29,7 +29,7 @@ def get_user_profile_preference_parser(request: Request) -> UserProfilePreferenc
     if parser is not None:
         return parser
     settings = get_settings(request)
-    return build_user_profile_preference_parser(api_key=settings.groq_api_key)
+    return build_user_profile_preference_parser(api_key=settings.gemini_api_key)
 
 
 def get_google_calendar_client(request: Request) -> GoogleCalendarProvider:

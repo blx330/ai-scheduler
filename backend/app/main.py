@@ -34,7 +34,7 @@ def create_app(
     app.state.settings = app_settings
     app.state.session_factory = session_factory or build_session_factory(app_settings.database_url)
     app.state.user_profile_preference_parser = user_profile_preference_parser or build_user_profile_preference_parser(
-        api_key=app_settings.groq_api_key,
+        api_key=app_settings.gemini_api_key,
     )
     app.state.google_calendar_client = google_calendar_client or build_google_calendar_client(
         client_id=app_settings.google_client_id,

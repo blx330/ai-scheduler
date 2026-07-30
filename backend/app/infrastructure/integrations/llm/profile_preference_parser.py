@@ -7,7 +7,7 @@ from typing import Any, Optional, Protocol
 
 from app.domain.preferences.models import CachedPracticePreference, summarize_cached_preference
 
-GROQ_PROFILE_MODEL = "llama-3.1-8b-instant"
+GEMINI_PROFILE_MODEL = "gemini-2.5-flash"
 logger = logging.getLogger(__name__)
 
 
@@ -69,16 +69,16 @@ class StubUserProfilePreferenceParser:
         return payload.model_dump(mode="json") | {"summary": summarize_cached_preference(payload)}
 
 
-class GroqUserProfilePreferenceParser:
-    version = "groq-profile-v1"
+class GeminiUserProfilePreferenceParser:
+    version = "gemini-profile-v1"
 
     def __init__(self, api_key: str) -> None:
         self.api_key = api_key
-        self.model = GROQ_PROFILE_MODEL
+        self.model = GEMINI_PROFILE_MODEL
 
     def parse(self, raw_text: str, timezone_name: str) -> dict[str, Any]:
-        groq_client_class = _get_groq_client_class()
-        client = groq_client_class(api_key=self.api_key)
+        genai_module, types_module = _get_genai_modules()
+        client = genai_module.Client(api_key=self.api_key)
         system_prompt = """You convert dance practice preference text into strict JSON.
 
 Return ONLY a JSON object with this exact shape:
@@ -99,25 +99,20 @@ Rules:
 - Do not include markdown code fences.
 - Do not include any text before or after the JSON object.
 - Return one raw JSON object only."""
-        completion = client.chat.completions.create(
+        response = client.models.generate_content(
             model=self.model,
-            temperature=0,
-            max_tokens=400,
-            messages=[
-                {
-                    "role": "system",
-                    "content": system_prompt,
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"User timezone: {timezone_name}\n"
-                        f'User preference text: "{raw_text}"'
-                    ),
-                },
-            ],
+            contents=(
+                f"User timezone: {timezone_name}\n"
+                f'User preference text: "{raw_text}"'
+            ),
+            config=types_module.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0,
+                max_output_tokens=400,
+                response_mime_type="application/json",
+            ),
         )
-        raw_content = completion.choices[0].message.content or ""
+        raw_content = response.text or ""
         logger.info("Raw preference parser LLM response: %s", raw_content)
 
         content = _extract_json_text(raw_content)
@@ -132,16 +127,17 @@ Rules:
 
 def build_user_profile_preference_parser(api_key: str = "") -> UserProfilePreferenceParser:
     if api_key:
-        return GroqUserProfilePreferenceParser(api_key=api_key)
+        return GeminiUserProfilePreferenceParser(api_key=api_key)
     return StubUserProfilePreferenceParser()
 
 
-def _get_groq_client_class():
+def _get_genai_modules():
     try:
-        from groq import Groq
+        from google import genai
+        from google.genai import types
     except ImportError as exc:
-        raise RuntimeError("groq must be installed to use Groq preference parsing") from exc
-    return Groq
+        raise RuntimeError("google-genai must be installed to use Gemini preference parsing") from exc
+    return genai, types
 
 
 def _coerce_profile_output(raw_structured: dict[str, Any], raw_text: str) -> dict[str, Any]:

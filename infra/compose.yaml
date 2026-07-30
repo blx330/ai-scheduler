@@ -18,8 +18,7 @@ services:
       - ../.env
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/scheduler
-      PARSER_MODE: ${PARSER_MODE:-stub}
-      FEATHER_API_KEY: ${FEATHER_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8000}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8000}
       OAUTH_STATE_SECRET: ${OAUTH_STATE_SECRET}
@@ -30,9 +29,6 @@ services:
       - "8000:8000"
     depends_on:
       - db
-    volumes:
-      - ../backend:/app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 volumes:
   postgres_data:
