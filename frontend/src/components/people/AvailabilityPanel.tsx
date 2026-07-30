@@ -34,6 +34,12 @@ export function AvailabilityPanel({ user }: { user: UserRead }) {
         <p className="text-xs text-muted-foreground">
           Explicit free-time windows, entered in {user.display_name}'s timezone ({user.timezone}).
         </p>
+        <p className="text-xs text-muted-foreground">
+          With no manual availability, {user.display_name.split(" ")[0]} is treated as fully unavailable for
+          scheduling &mdash; unless their Google Calendar is connected, in which case having zero manual entries
+          instead means they're treated as available for the whole planning horizon (busy time still gets
+          subtracted).
+        </p>
       </CardHeader>
       <CardContent className="space-y-4">
         <form className="flex flex-wrap items-end gap-3" onSubmit={handleSubmit}>

@@ -18,7 +18,8 @@ def test_create_user_returns_422_for_invalid_timezone(client) -> None:
     )
 
     assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"] == ["body", "timezone"]
+    assert isinstance(response.json()["detail"], str)
+    assert "timezone" in response.json()["detail"]
 
 
 def test_user_profile_can_store_preferred_practice_time(client) -> None:

@@ -107,6 +107,10 @@ export function GoogleCalendarPanel({ user }: { user: UserRead }) {
 
                 <div className="space-y-1">
                   <Label htmlFor="write-calendar">Write calendar (for confirmed sessions)</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Only takes effect when {user.display_name} organizes the event whose session gets confirmed
+                    &mdash; sessions are always written to the organizer's calendar, never a participant's.
+                  </p>
                   <Select value={writeId} onValueChange={setWriteId}>
                     <SelectTrigger id="write-calendar" className="w-full max-w-sm">
                       <SelectValue placeholder="Choose a calendar" />

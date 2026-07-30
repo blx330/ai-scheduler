@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -41,6 +42,14 @@ def create_app(
         client_secret=app_settings.google_client_secret,
         redirect_uri=app_settings.google_redirect_uri,
     )
+
+    @app.exception_handler(RequestValidationError)
+    async def handle_validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
+        messages = []
+        for error in exc.errors():
+            loc = ".".join(str(part) for part in error["loc"] if part != "body")
+            messages.append(f"{loc}: {error['msg']}" if loc else error["msg"])
+        return JSONResponse(status_code=422, content={"detail": "; ".join(messages)})
 
     @app.exception_handler(OperationalError)
     async def handle_operational_error(_: Request, exc: OperationalError) -> JSONResponse:
