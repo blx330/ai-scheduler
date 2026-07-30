@@ -7,7 +7,7 @@ from app.infrastructure.config import Settings
 from app.infrastructure.db.models import CalendarBusyInterval, CalendarConnection
 from app.infrastructure.integrations.google_calendar.client import GoogleBusyInterval, GoogleCalendarSummary, GoogleCreatedEvent
 from app.infrastructure.integrations.google_calendar.client import GoogleOAuthTokens
-from app.infrastructure.integrations.llm.profile_preference_parser import GroqUserProfilePreferenceParser
+from app.infrastructure.integrations.llm.profile_preference_parser import GeminiUserProfilePreferenceParser
 from app.main import create_app
 
 
@@ -157,16 +157,16 @@ def test_create_user_rejects_duplicate_email_when_registration_completed(client,
     assert duplicate.json()["detail"] == "A user with that email already exists"
 
 
-def test_app_bootstraps_groq_profile_parser_from_groq_env(monkeypatch, session_factory) -> None:
-    monkeypatch.setenv("GROQ_API_KEY", "groq-demo-key")
+def test_app_bootstraps_gemini_profile_parser_from_gemini_env(monkeypatch, session_factory) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-demo-key")
     settings = Settings(database_url="sqlite:///ignored.db")
 
     app = create_app(settings=settings, session_factory=session_factory)
 
     parser = app.state.user_profile_preference_parser
-    assert isinstance(parser, GroqUserProfilePreferenceParser)
-    assert settings.groq_api_key == "groq-demo-key"
-    assert parser.api_key == "groq-demo-key"
+    assert isinstance(parser, GeminiUserProfilePreferenceParser)
+    assert settings.gemini_api_key == "gemini-demo-key"
+    assert parser.api_key == "gemini-demo-key"
 
 
 def test_connected_google_users_can_plan_without_manual_availability(client, app) -> None:

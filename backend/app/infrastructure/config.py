@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     app_base_url: str = "http://localhost:8000"
     frontend_url: str = "http://localhost:8000"
     oauth_state_secret: Optional[str] = Field(default=None, validation_alias="OAUTH_STATE_SECRET")
-    groq_api_key: str = ""
+    gemini_api_key: str = Field(default="", validation_alias="GEMINI_API_KEY")
     google_client_id: Optional[str] = Field(default=None, validation_alias="GOOGLE_CLIENT_ID")
     google_client_secret: Optional[str] = Field(default=None, validation_alias="GOOGLE_CLIENT_SECRET")
     google_redirect_uri: Optional[str] = Field(default=None, validation_alias="GOOGLE_REDIRECT_URI")
