@@ -1,17 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { planningApi, practicesApi } from "@/api/endpoints";
 import type { PlanningRunConfirmRequest, PlanningRunCreate } from "@/api/types";
 import { errorMessage, queryKeys } from "./query-keys";
-
-export function usePlanningRun(id: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.planningRun(id ?? ""),
-    queryFn: () => planningApi.get(id as string),
-    enabled: Boolean(id),
-  });
-}
 
 export function useCreatePlanningRun() {
   return useMutation({

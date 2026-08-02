@@ -41,16 +41,13 @@ export const availabilityApi = {
 
 export const eventsApi = {
   list: () => api.get<DanceEventRead[]>("/events"),
-  get: (id: string) => api.get<DanceEventRead>(`/events/${id}`),
   create: (body: DanceEventCreate) => api.post<DanceEventRead>("/events", body),
   update: (id: string, body: DanceEventUpdate) => api.patch<DanceEventRead>(`/events/${id}`, body),
   sessions: (id: string) => api.get<PracticeSessionRead[]>(`/events/${id}/sessions`),
-  remove: (id: string) => api.delete<void>(`/events/${id}`),
 };
 
 export const planningApi = {
   create: (body: PlanningRunCreate) => api.post<PlanningRunRead>("/planning-runs", body),
-  get: (id: string) => api.get<PlanningRunRead>(`/planning-runs/${id}`),
   confirm: (id: string, body: PlanningRunConfirmRequest) =>
     api.post<PlanningRunConfirmResponse>(`/planning-runs/${id}/confirm`, body),
 };

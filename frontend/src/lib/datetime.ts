@@ -13,20 +13,6 @@ export function isoToZonedParts(iso: string, timeZone: string): { date: string; 
   };
 }
 
-export function formatDateTime(iso: string, timeZone?: string): string {
-  if (timeZone) {
-    return formatInTimeZone(iso, timeZone, "EEE MMM d, yyyy h:mm a zzz");
-  }
-  return new Date(iso).toLocaleString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
 export function formatTimeRange(startIso: string, endIso: string, timeZone?: string): string {
   if (timeZone) {
     const day = formatInTimeZone(startIso, timeZone, "EEE MMM d");
@@ -40,12 +26,4 @@ export function formatTimeRange(startIso: string, endIso: string, timeZone?: str
   const startTime = start.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   const endTime = end.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   return `${day}, ${startTime} - ${endTime}`;
-}
-
-export function dateOnlyToIsoStartOfDay(dateStr: string, timeZone: string): string {
-  return fromZonedTime(`${dateStr}T00:00:00`, timeZone).toISOString();
-}
-
-export function dateOnlyToIsoEndOfDay(dateStr: string, timeZone: string): string {
-  return fromZonedTime(`${dateStr}T23:59:59`, timeZone).toISOString();
 }
