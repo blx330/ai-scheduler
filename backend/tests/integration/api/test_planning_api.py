@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from uuid import UUID, uuid4
 
-from app.infrastructure.db.models import CalendarConnection
+from app.infrastructure.db.models import CalendarConnection, PracticeSession, Room
 from app.infrastructure.integrations.google_calendar.client import GoogleCreatedEvent
 
 
@@ -903,6 +904,374 @@ def test_unschedule_practice_still_succeeds_when_google_delete_fails(client, app
     sessions_response = client.get(f"/api/v1/events/{event['id']}/sessions")
     assert sessions_response.status_code == 200
     assert sessions_response.json() == []
+
+
+class _FakeGoogleClientBase:
+    def build_authorization_url(self, state: str) -> str:  # pragma: no cover - unused in these tests
+        return state
+
+    def exchange_code(self, code: str):  # pragma: no cover - unused in these tests
+        raise NotImplementedError
+
+    def refresh_access_token(self, refresh_token: str):  # pragma: no cover - unused in these tests
+        raise NotImplementedError
+
+    def list_calendars(self, access_token: str):  # pragma: no cover - unused in these tests
+        return []
+
+    def get_free_busy(self, access_token: str, calendar_ids: list[str], time_min: datetime, time_max: datetime):  # pragma: no cover - unused in these tests
+        return []
+
+    def delete_event(self, access_token: str, calendar_id: str, event_id: str) -> None:  # pragma: no cover - unused in these tests
+        raise NotImplementedError
+
+
+def _grant_google_connection(app, user_id: str) -> None:
+    session = app.state.session_factory()
+    try:
+        session.add(
+            CalendarConnection(
+                user_id=user_id,
+                provider="google",
+                status="configured",
+                access_token="live-token",
+                scopes="https://www.googleapis.com/auth/calendar",
+                token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                selected_busy_calendar_ids_json=["primary"],
+                selected_write_calendar_id="primary",
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_reschedule_moves_confirmed_session_and_updates_google_event(client, app) -> None:
+    class FakeGoogleClient(_FakeGoogleClientBase):
+        def __init__(self) -> None:
+            self.updated_events: list[tuple[str, str, datetime, datetime]] = []
+
+        def create_event(self, access_token, calendar_id, title, start_at, end_at, timezone_name, attendee_emails, description=None) -> GoogleCreatedEvent:
+            return GoogleCreatedEvent(
+                event_id="practice_evt_reschedule",
+                html_link="https://calendar.google.com/event?eid=practice_evt_reschedule",
+                status="confirmed",
+                calendar_id=calendar_id,
+                start_at=start_at,
+                end_at=end_at,
+            )
+
+        def update_event(self, access_token, calendar_id, event_id, start_at, end_at, timezone_name) -> GoogleCreatedEvent:
+            assert access_token == "live-token"
+            self.updated_events.append((calendar_id, event_id, start_at, end_at))
+            return GoogleCreatedEvent(
+                event_id=event_id,
+                html_link="https://calendar.google.com/event?eid=practice_evt_reschedule&updated=1",
+                status="confirmed",
+                calendar_id=calendar_id,
+                start_at=start_at,
+                end_at=end_at,
+            )
+
+    fake_client = FakeGoogleClient()
+    app.state.google_calendar_client = fake_client
+
+    organizer = _create_user(client, "Coach Reschedule", "coach-reschedule@example.com")
+    dancer = _create_user(client, "Reschedule Dancer", "reschedule-dancer@example.com")
+    _add_availability(client, dancer["id"], "2026-04-12T08:00:00Z", "2026-04-12T14:00:00Z")
+    _grant_google_connection(app, organizer["id"])
+
+    event = _create_event(
+        client,
+        name="Reschedule Dance",
+        organizer_user_id=organizer["id"],
+        duration_minutes=60,
+        latest_schedule_at="2026-04-12T14:00:00Z",
+        required_session_count=1,
+        participants=[{"user_id": dancer["id"], "role": "required"}],
+    )
+    planning_run = _create_planning_run(
+        client,
+        event_ids=[event["id"]],
+        horizon_start="2026-04-12T08:00:00Z",
+        horizon_end="2026-04-12T14:00:00Z",
+    ).json()
+    result_id = planning_run["results"][0]["recommendations"][0]["id"]
+
+    confirm_response = client.post(
+        f"/api/v1/planning-runs/{planning_run['id']}/confirm",
+        json={"result_ids": [result_id]},
+    )
+    assert confirm_response.status_code == 200
+    practice_session = confirm_response.json()["confirmed_sessions"][0]
+    assert practice_session["google_calendar_event_id"] == "practice_evt_reschedule"
+
+    reschedule_response = client.patch(
+        f"/api/v1/practices/{practice_session['id']}/schedule",
+        json={"start_at": "2026-04-12T11:00:00Z", "end_at": "2026-04-12T12:00:00Z"},
+    )
+    assert reschedule_response.status_code == 200
+    body = reschedule_response.json()
+    assert body["practice"]["start_at"] == "2026-04-12T11:00:00Z"
+    assert body["practice"]["end_at"] == "2026-04-12T12:00:00Z"
+    assert body["google_event_updated"] is True
+    assert body["warning"] is None
+    assert fake_client.updated_events == [
+        ("primary", "practice_evt_reschedule", datetime(2026, 4, 12, 11, 0, tzinfo=timezone.utc), datetime(2026, 4, 12, 12, 0, tzinfo=timezone.utc))
+    ]
+
+
+def test_reschedule_room_conflict_requires_override_then_succeeds(client) -> None:
+    organizer = _create_user(client, "Coach Room Conflict", "coach-room-conflict@example.com")
+    dancer_a = _create_user(client, "Room Conflict Dancer A", "room-conflict-a@example.com")
+    dancer_b = _create_user(client, "Room Conflict Dancer B", "room-conflict-b@example.com")
+    _add_availability(client, dancer_a["id"], "2026-04-13T08:00:00Z", "2026-04-13T14:00:00Z")
+    _add_availability(client, dancer_b["id"], "2026-04-13T08:00:00Z", "2026-04-13T14:00:00Z")
+
+    event_a = _create_event(
+        client,
+        name="Room Conflict Dance A",
+        organizer_user_id=organizer["id"],
+        duration_minutes=60,
+        latest_schedule_at="2026-04-13T14:00:00Z",
+        required_session_count=1,
+        participants=[{"user_id": dancer_a["id"], "role": "required"}],
+    )
+    event_b = _create_event(
+        client,
+        name="Room Conflict Dance B",
+        organizer_user_id=organizer["id"],
+        duration_minutes=60,
+        latest_schedule_at="2026-04-13T14:00:00Z",
+        required_session_count=1,
+        participants=[{"user_id": dancer_b["id"], "role": "required"}],
+    )
+
+    run_a = _create_planning_run(
+        client, event_ids=[event_a["id"]], horizon_start="2026-04-13T08:00:00Z", horizon_end="2026-04-13T09:00:00Z"
+    ).json()
+    confirm_a = client.post(
+        f"/api/v1/planning-runs/{run_a['id']}/confirm",
+        json={"result_ids": [run_a["results"][0]["recommendations"][0]["id"]]},
+    )
+    assert confirm_a.status_code == 200
+    practice_a = confirm_a.json()["confirmed_sessions"][0]
+
+    run_b = _create_planning_run(
+        client, event_ids=[event_b["id"]], horizon_start="2026-04-13T10:00:00Z", horizon_end="2026-04-13T11:00:00Z"
+    ).json()
+    confirm_b = client.post(
+        f"/api/v1/planning-runs/{run_b['id']}/confirm",
+        json={"result_ids": [run_b["results"][0]["recommendations"][0]["id"]]},
+    )
+    assert confirm_b.status_code == 200
+    practice_b = confirm_b.json()["confirmed_sessions"][0]
+
+    # Both events land in the shared default room and have disjoint participants, so
+    # moving B onto A's exact time conflicts on the room only.
+    conflict_response = client.patch(
+        f"/api/v1/practices/{practice_b['id']}/schedule",
+        json={"start_at": practice_a["start_at"], "end_at": practice_a["end_at"]},
+    )
+    assert conflict_response.status_code == 409
+    detail = conflict_response.json()["detail"]
+    assert detail["conflict_type"] == "room"
+    assert detail["conflicting_practice_id"] == practice_a["id"]
+
+    override_response = client.patch(
+        f"/api/v1/practices/{practice_b['id']}/schedule",
+        json={"start_at": practice_a["start_at"], "end_at": practice_a["end_at"], "override_conflicts": True},
+    )
+    assert override_response.status_code == 200
+    assert override_response.json()["practice"]["start_at"] == practice_a["start_at"]
+
+
+def test_reschedule_participant_conflict_requires_override(client, app) -> None:
+    organizer = _create_user(client, "Coach Participant Conflict", "coach-participant-conflict@example.com")
+    shared_dancer = _create_user(client, "Shared Conflict Dancer", "shared-conflict-dancer@example.com")
+    _add_availability(client, shared_dancer["id"], "2026-04-14T08:00:00Z", "2026-04-14T14:00:00Z")
+
+    event_a = _create_event(
+        client,
+        name="Shared Dance A",
+        organizer_user_id=organizer["id"],
+        duration_minutes=60,
+        latest_schedule_at="2026-04-14T14:00:00Z",
+        required_session_count=1,
+        participants=[{"user_id": shared_dancer["id"], "role": "required"}],
+    )
+    event_b = _create_event(
+        client,
+        name="Shared Dance B",
+        organizer_user_id=organizer["id"],
+        duration_minutes=60,
+        latest_schedule_at="2026-04-14T14:00:00Z",
+        required_session_count=1,
+        participants=[{"user_id": shared_dancer["id"], "role": "required"}],
+    )
+
+    # Event A is confirmed into the default room *before* a second room exists, so it
+    # can't accidentally land in the room created below for event B.
+    run_a = _create_planning_run(
+        client, event_ids=[event_a["id"]], horizon_start="2026-04-14T08:00:00Z", horizon_end="2026-04-14T09:00:00Z"
+    ).json()
+    confirm_a = client.post(
+        f"/api/v1/planning-runs/{run_a['id']}/confirm",
+        json={"result_ids": [run_a["results"][0]["recommendations"][0]["id"]]},
+    )
+    assert confirm_a.status_code == 200
+    practice_a = confirm_a.json()["confirmed_sessions"][0]
+
+    session = app.state.session_factory()
+    try:
+        second_room = Room(name="Second Studio", is_active=True)
+        session.add(second_room)
+        session.commit()
+        second_room_id = str(second_room.id)
+    finally:
+        session.close()
+
+    run_b_response = client.post(
+        "/api/v1/planning-runs",
+        json={
+            "event_ids": [event_b["id"]],
+            "horizon_start": "2026-04-14T10:00:00Z",
+            "horizon_end": "2026-04-14T11:00:00Z",
+            "slot_step_minutes": 60,
+            "room_id": second_room_id,
+        },
+    )
+    run_b = run_b_response.json()
+    confirm_b = client.post(
+        f"/api/v1/planning-runs/{run_b['id']}/confirm",
+        json={"result_ids": [run_b["results"][0]["recommendations"][0]["id"]]},
+    )
+    assert confirm_b.status_code == 200
+    practice_b = confirm_b.json()["confirmed_sessions"][0]
+
+    # Different rooms rule out a room conflict, so this isolates the participant check:
+    # the shared dancer is required on both, and B is being moved onto A's exact time.
+    conflict_response = client.patch(
+        f"/api/v1/practices/{practice_b['id']}/schedule",
+        json={"start_at": practice_a["start_at"], "end_at": practice_a["end_at"]},
+    )
+    assert conflict_response.status_code == 409
+    detail = conflict_response.json()["detail"]
+    assert detail["conflict_type"] == "participant"
+    assert detail["conflicting_practice_id"] == practice_a["id"]
+
+
+def test_reschedule_rejects_change_that_violates_duration(client) -> None:
+    run, result_id = _run_for_override_tests(client)
+    confirm_response = client.post(
+        f"/api/v1/planning-runs/{run['id']}/confirm", json={"result_ids": [result_id]}
+    )
+    practice = confirm_response.json()["confirmed_sessions"][0]
+
+    response = client.patch(
+        f"/api/v1/practices/{practice['id']}/schedule",
+        json={"start_at": "2026-04-01T10:00:00Z", "end_at": "2026-04-01T10:05:00Z"},
+    )
+    assert response.status_code == 400
+    assert "duration" in response.json()["detail"].lower()
+
+
+def test_reschedule_rejects_outside_practice_window(client) -> None:
+    run, result_id = _run_for_override_tests(client)
+    confirm_response = client.post(
+        f"/api/v1/planning-runs/{run['id']}/confirm", json={"result_ids": [result_id]}
+    )
+    practice = confirm_response.json()["confirmed_sessions"][0]
+
+    response = client.patch(
+        f"/api/v1/practices/{practice['id']}/schedule",
+        json={"start_at": "2026-04-01T03:00:00Z", "end_at": "2026-04-01T04:00:00Z"},
+    )
+    assert response.status_code == 400
+    assert "8:00 AM" in response.json()["detail"]
+
+
+def test_reschedule_rejects_unknown_practice(client) -> None:
+    response = client.patch(
+        f"/api/v1/practices/{uuid4()}/schedule",
+        json={"start_at": "2026-04-01T10:00:00Z", "end_at": "2026-04-01T11:00:00Z"},
+    )
+    assert response.status_code == 404
+
+
+def test_reschedule_rejects_non_confirmed_session(client, app) -> None:
+    run, result_id = _run_for_override_tests(client)
+    confirm_response = client.post(
+        f"/api/v1/planning-runs/{run['id']}/confirm", json={"result_ids": [result_id]}
+    )
+    practice_id = confirm_response.json()["confirmed_sessions"][0]["id"]
+
+    session = app.state.session_factory()
+    try:
+        practice = session.get(PracticeSession, UUID(practice_id))
+        practice.status = "cancelled"
+        session.add(practice)
+        session.commit()
+    finally:
+        session.close()
+
+    response = client.patch(
+        f"/api/v1/practices/{practice_id}/schedule",
+        json={"start_at": "2026-04-01T10:00:00Z", "end_at": "2026-04-01T11:00:00Z"},
+    )
+    assert response.status_code == 400
+    assert "confirmed" in response.json()["detail"].lower()
+
+
+def test_reschedule_still_succeeds_when_google_update_fails(client, app) -> None:
+    class FakeGoogleClient(_FakeGoogleClientBase):
+        def create_event(self, access_token, calendar_id, title, start_at, end_at, timezone_name, attendee_emails, description=None) -> GoogleCreatedEvent:
+            return GoogleCreatedEvent(
+                event_id="practice_evt_warn",
+                html_link="https://calendar.google.com/event?eid=practice_evt_warn",
+                status="confirmed",
+                calendar_id=calendar_id,
+                start_at=start_at,
+                end_at=end_at,
+            )
+
+        def update_event(self, access_token, calendar_id, event_id, start_at, end_at, timezone_name) -> GoogleCreatedEvent:
+            raise RuntimeError("Google Calendar event update failed: event not found")
+
+    app.state.google_calendar_client = FakeGoogleClient()
+
+    organizer = _create_user(client, "Coach Warn", "coach-warn@example.com")
+    dancer = _create_user(client, "Warn Dancer", "warn-dancer@example.com")
+    _add_availability(client, dancer["id"], "2026-04-15T08:00:00Z", "2026-04-15T14:00:00Z")
+    _grant_google_connection(app, organizer["id"])
+
+    event = _create_event(
+        client,
+        name="Warn Dance",
+        organizer_user_id=organizer["id"],
+        duration_minutes=60,
+        latest_schedule_at="2026-04-15T14:00:00Z",
+        required_session_count=1,
+        participants=[{"user_id": dancer["id"], "role": "required"}],
+    )
+    planning_run = _create_planning_run(
+        client, event_ids=[event["id"]], horizon_start="2026-04-15T08:00:00Z", horizon_end="2026-04-15T14:00:00Z"
+    ).json()
+    result_id = planning_run["results"][0]["recommendations"][0]["id"]
+    confirm_response = client.post(
+        f"/api/v1/planning-runs/{planning_run['id']}/confirm", json={"result_ids": [result_id]}
+    )
+    practice = confirm_response.json()["confirmed_sessions"][0]
+
+    reschedule_response = client.patch(
+        f"/api/v1/practices/{practice['id']}/schedule",
+        json={"start_at": "2026-04-15T11:00:00Z", "end_at": "2026-04-15T12:00:00Z"},
+    )
+    assert reschedule_response.status_code == 200
+    body = reschedule_response.json()
+    assert body["practice"]["start_at"] == "2026-04-15T11:00:00Z"
+    assert body["google_event_updated"] is False
+    assert "not updated on Google Calendar" in body["warning"]
 
 
 def _create_user(

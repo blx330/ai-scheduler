@@ -2,10 +2,12 @@ import type { ApiErrorBody } from "./types";
 
 export class ApiError extends Error {
   status: number;
+  detail: ApiErrorBody["detail"] | undefined;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, detail?: ApiErrorBody["detail"]) {
     super(message);
     this.status = status;
+    this.detail = detail;
     this.name = "ApiError";
   }
 }
@@ -23,13 +25,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     let message = response.statusText;
+    let detail: ApiErrorBody["detail"] | undefined;
     try {
       const body = (await response.json()) as ApiErrorBody;
-      if (body?.detail) message = body.detail;
+      if (body?.detail) {
+        detail = body.detail;
+        message = typeof body.detail === "string" ? body.detail : body.detail.message;
+      }
     } catch {
       // response had no JSON body
     }
-    throw new ApiError(response.status, message);
+    throw new ApiError(response.status, message, detail);
   }
 
   if (response.status === 204) {

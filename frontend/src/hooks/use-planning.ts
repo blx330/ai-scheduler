@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { planningApi, practicesApi } from "@/api/endpoints";
-import type { PlanningRunConfirmRequest, PlanningRunCreate } from "@/api/types";
+import type { PlanningRunConfirmRequest, PlanningRunCreate, PracticeRescheduleRequest } from "@/api/types";
 import { errorMessage, queryKeys } from "./query-keys";
 
 export function useCreatePlanningRun() {
@@ -26,6 +26,24 @@ export function useConfirmPlanningRun() {
       for (const warning of data.warnings ?? []) toast.warning(warning);
     },
     onError: (error) => toast.error(errorMessage(error)),
+  });
+}
+
+export function useReschedulePractice() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ practiceId, body }: { practiceId: string; body: PracticeRescheduleRequest }) =>
+      practicesApi.reschedule(practiceId, body),
+    onSuccess: (data) => {
+      void queryClient.invalidateQueries({ queryKey: ["calendar-overview"] });
+      if (data.warning) {
+        toast.warning(data.warning);
+      } else {
+        toast.success("Session rescheduled");
+      }
+    },
+    // No onError toast: the 409 conflict case is handled by the caller to drive a
+    // confirmation dialog instead of a toast; other errors are surfaced there too.
   });
 }
 

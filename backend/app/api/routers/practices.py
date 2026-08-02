@@ -4,9 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_google_calendar_client, get_settings
-from app.api.schemas.planning import PracticeUnscheduleResponse
+from app.api.routers._planning_serializers import serialize_practice_session
+from app.api.schemas.planning import (
+    PracticeRescheduleRequest,
+    PracticeRescheduleResponse,
+    PracticeUnscheduleResponse,
+)
 from app.application.services.google_calendar_service import GoogleCalendarService
-from app.application.services.planning_service import PlanningService
+from app.application.services.planning_service import PlanningService, SchedulingConflictError
 from app.infrastructure.config import Settings
 from app.infrastructure.integrations.google_calendar.client import GoogleCalendarProvider
 
@@ -42,5 +47,36 @@ def unschedule_practice(
         dance_event_id=practice_session.dance_event_id,
         unscheduled=True,
         google_event_deleted=google_event_deleted,
+        warning=warning,
+    )
+
+
+@router.patch("/{practice_id}/schedule", response_model=PracticeRescheduleResponse)
+def reschedule_practice(
+    practice_id: UUID,
+    payload: PracticeRescheduleRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    client: GoogleCalendarProvider = Depends(get_google_calendar_client),
+) -> PracticeRescheduleResponse:
+    planning_service = PlanningService(db)
+    try:
+        session, google_updated, warning = planning_service.reschedule_practice_session(
+            practice_id,
+            start_at=payload.start_at,
+            end_at=payload.end_at,
+            override_conflicts=payload.override_conflicts,
+            google_calendar_service=GoogleCalendarService(db, settings, client),
+        )
+    except SchedulingConflictError as exc:
+        raise HTTPException(status_code=409, detail=exc.to_detail()) from exc
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 404 if message == "Practice session not found" else 400
+        raise HTTPException(status_code=status_code, detail=message) from exc
+
+    return PracticeRescheduleResponse(
+        practice=serialize_practice_session(session),
+        google_event_updated=google_updated,
         warning=warning,
     )

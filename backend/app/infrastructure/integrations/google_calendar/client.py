@@ -93,6 +93,17 @@ class GoogleCalendarProvider(Protocol):
     ) -> GoogleCreatedEvent:
         ...
 
+    def update_event(
+        self,
+        access_token: str,
+        calendar_id: str,
+        event_id: str,
+        start_at: datetime,
+        end_at: datetime,
+        timezone_name: str,
+    ) -> GoogleCreatedEvent:
+        ...
+
     def delete_event(
         self,
         access_token: str,
@@ -277,6 +288,43 @@ class GoogleCalendarClient:
             end_at=_parse_google_datetime(payload["end"]["dateTime"]),
         )
 
+    def update_event(
+        self,
+        access_token: str,
+        calendar_id: str,
+        event_id: str,
+        start_at: datetime,
+        end_at: datetime,
+        timezone_name: str,
+    ) -> GoogleCreatedEvent:
+        encoded_calendar_id = quote(calendar_id, safe="")
+        encoded_event_id = quote(event_id, safe="")
+        response = self._requests().patch(
+            f"{GOOGLE_EVENTS_URL_TEMPLATE.format(calendar_id=encoded_calendar_id)}/{encoded_event_id}",
+            headers=self._auth_headers(access_token),
+            json={
+                "start": {
+                    "dateTime": start_at.astimezone(timezone.utc).isoformat(),
+                    "timeZone": timezone_name,
+                },
+                "end": {
+                    "dateTime": end_at.astimezone(timezone.utc).isoformat(),
+                    "timeZone": timezone_name,
+                },
+            },
+            timeout=30,
+        )
+        self._raise_for_google_error(response, "Google Calendar event update")
+        payload = response.json()
+        return GoogleCreatedEvent(
+            event_id=payload["id"],
+            html_link=payload.get("htmlLink"),
+            status=payload.get("status", "confirmed"),
+            calendar_id=calendar_id,
+            start_at=_parse_google_datetime(payload["start"]["dateTime"]),
+            end_at=_parse_google_datetime(payload["end"]["dateTime"]),
+        )
+
     def delete_event(
         self,
         access_token: str,
@@ -401,6 +449,17 @@ class NoopGoogleCalendarProvider:
         description: Optional[str] = None,
     ) -> GoogleCreatedEvent:
         self._raise_unconfigured("create_event")
+
+    def update_event(
+        self,
+        access_token: str,
+        calendar_id: str,
+        event_id: str,
+        start_at: datetime,
+        end_at: datetime,
+        timezone_name: str,
+    ) -> GoogleCreatedEvent:
+        self._raise_unconfigured("update_event")
 
     def delete_event(
         self,

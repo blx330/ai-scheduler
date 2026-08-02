@@ -42,6 +42,42 @@ from app.application.services.google_calendar_service import GoogleCalendarServi
 logger = logging.getLogger(__name__)
 
 
+class SchedulingConflictError(ValueError):
+    """A reschedule target conflicts with an existing room or participant reservation.
+
+    Subclasses ValueError so it degrades sanely if ever caught generically, but the
+    caller may retry with override_conflicts=True, so this carries structured detail
+    a plain message would lose.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        conflict_type: str,
+        conflicting_practice_id: UUID,
+        conflicting_label: str,
+        conflicting_start_at: datetime,
+        conflicting_end_at: datetime,
+    ) -> None:
+        super().__init__(message)
+        self.conflict_type = conflict_type
+        self.conflicting_practice_id = conflicting_practice_id
+        self.conflicting_label = conflicting_label
+        self.conflicting_start_at = conflicting_start_at
+        self.conflicting_end_at = conflicting_end_at
+
+    def to_detail(self) -> dict:
+        return {
+            "message": str(self),
+            "conflict_type": self.conflict_type,
+            "conflicting_practice_id": str(self.conflicting_practice_id),
+            "conflicting_label": self.conflicting_label,
+            "conflicting_start_at": self.conflicting_start_at.isoformat(),
+            "conflicting_end_at": self.conflicting_end_at.isoformat(),
+        }
+
+
 class PlanningService:
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -173,8 +209,8 @@ class PlanningService:
             effective_start_at, effective_end_at = _effective_window(result)
             if effective_end_at <= effective_start_at:
                 raise ValueError("Confirmed slot end must be after start")
-            _validate_result_against_event_constraints(
-                result=result,
+            _validate_event_constraints(
+                dance_event=result.dance_event,
                 start_at=effective_start_at,
                 end_at=effective_end_at,
                 selected_starts=selected_starts_by_event[result.dance_event_id],
@@ -296,9 +332,106 @@ class PlanningService:
             .options(
                 selectinload(PracticeSession.dance_event).selectinload(DanceEvent.organizer),
                 selectinload(PracticeSession.dance_event).selectinload(DanceEvent.practice_sessions),
+                selectinload(PracticeSession.dance_event).selectinload(DanceEvent.participants),
             )
         )
         return self.db.scalars(statement).one_or_none()
+
+    def reschedule_practice_session(
+        self,
+        practice_session_id: UUID,
+        start_at: datetime,
+        end_at: datetime,
+        override_conflicts: bool = False,
+        google_calendar_service: Optional[GoogleCalendarService] = None,
+    ) -> tuple[PracticeSession, bool, Optional[str]]:
+        session = self.get_practice_session(practice_session_id)
+        if session is None:
+            raise ValueError("Practice session not found")
+        if session.status != "confirmed":
+            raise ValueError("Only confirmed sessions can be rescheduled")
+
+        start_at = ensure_utc(start_at)
+        end_at = ensure_utc(end_at)
+        if end_at <= start_at:
+            raise ValueError("Rescheduled slot end must be after start")
+
+        _validate_event_constraints(
+            dance_event=session.dance_event,
+            start_at=start_at,
+            end_at=end_at,
+            selected_starts=[],
+            exclude_session_id=session.id,
+        )
+
+        missing_required = set(session.missing_required_user_ids_json or [])
+        required_attendees = frozenset(
+            participant.user_id
+            for participant in session.dance_event.participants
+            if participant.role == "required" and str(participant.user_id) not in missing_required
+        )
+        reservations = [
+            reservation
+            for reservation in self._load_confirmed_reservations(horizon_start=start_at, horizon_end=end_at)
+            if reservation.identifier != str(session.id)
+        ]
+        room_conflict = next(
+            (
+                reservation
+                for reservation in reservations
+                if reservation.room_id == session.room_id
+                and start_at < reservation.end_at
+                and end_at > reservation.start_at
+            ),
+            None,
+        )
+        participant_conflict = None
+        if room_conflict is None:
+            participant_conflict = next(
+                (
+                    reservation
+                    for reservation in reservations
+                    if required_attendees & reservation.participant_user_ids
+                    and start_at < reservation.end_at
+                    and end_at > reservation.start_at
+                ),
+                None,
+            )
+        conflict = room_conflict or participant_conflict
+        if conflict is not None and not override_conflicts:
+            conflicting_event = (
+                self.db.get(DanceEvent, conflict.dance_event_id) if conflict.dance_event_id else None
+            )
+            conflicting_label = (
+                f"{conflicting_event.name} (session {conflict.session_index})"
+                if conflicting_event is not None
+                else "another practice session"
+            )
+            raise SchedulingConflictError(
+                "This time conflicts with an existing reservation",
+                conflict_type="room" if room_conflict is not None else "participant",
+                conflicting_practice_id=UUID(conflict.identifier),
+                conflicting_label=conflicting_label,
+                conflicting_start_at=conflict.start_at,
+                conflicting_end_at=conflict.end_at,
+            )
+
+        session.start_at = start_at
+        session.end_at = end_at
+        self.db.add(session)
+        self.db.commit()
+        self.db.refresh(session)
+
+        google_updated = False
+        warning = None
+        if google_calendar_service is not None and session.google_calendar_event_id:
+            try:
+                google_calendar_service.update_event_for_practice_session(session.id)
+                google_updated = True
+            except (ValueError, RuntimeError) as exc:
+                warning = f"Practice was rescheduled but not updated on Google Calendar: {exc}"
+
+        return session, google_updated, warning
 
     def unschedule_practice_session(self, practice_session_id: UUID) -> Optional[PracticeSession]:
         session = self.get_practice_session(practice_session_id)
@@ -623,16 +756,16 @@ def _pending_session_indices(event: DanceEvent) -> tuple[int, ...]:
     )
 
 
-def _validate_result_against_event_constraints(
-    result: PlanningRunResult,
-    start_at: Optional[datetime],
+def _validate_event_constraints(
+    dance_event: DanceEvent,
+    start_at: datetime,
+    end_at: datetime,
     selected_starts: list[date],
-    end_at: Optional[datetime] = None,
+    exclude_session_id: Optional[UUID] = None,
 ) -> None:
-    dance_event = result.dance_event
-    organizer_zone = _organizer_zone_for_result(result)
-    candidate_start = ensure_utc(start_at or result.start_at)
-    candidate_end = ensure_utc(end_at or result.end_at)
+    organizer_zone = _organizer_zone_for_event(dance_event)
+    candidate_start = ensure_utc(start_at)
+    candidate_end = ensure_utc(end_at)
     local_date = candidate_start.astimezone(organizer_zone).date()
 
     # These three hold by construction for engine-generated slots, but a client may
@@ -660,17 +793,21 @@ def _validate_result_against_event_constraints(
     existing_dates = {
         ensure_utc(session.start_at).astimezone(organizer_zone).date()
         for session in dance_event.practice_sessions
-        if session.status == "confirmed"
+        if session.status == "confirmed" and session.id != exclude_session_id
     }
     existing_dates.update(selected_starts)
     if any(abs((local_date - other_date).days) < dance_event.min_days_apart for other_date in existing_dates):
         raise ValueError("Selected planning result violates the dance's minimum days apart rule")
 
 
-def _organizer_zone_for_result(result: PlanningRunResult):
+def _organizer_zone_for_event(dance_event: DanceEvent):
     from zoneinfo import ZoneInfo
 
-    return ZoneInfo(result.dance_event.organizer.timezone)
+    return ZoneInfo(dance_event.organizer.timezone)
+
+
+def _organizer_zone_for_result(result: PlanningRunResult):
+    return _organizer_zone_for_event(result.dance_event)
 
 
 def _manual_override_explanation(result: PlanningRunResult) -> dict:

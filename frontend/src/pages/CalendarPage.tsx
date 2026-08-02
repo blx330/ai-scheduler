@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { addDays, addWeeks, endOfWeek, format, startOfWeek, subWeeks } from "date-fns";
-import { ChevronLeft, ChevronRight, Plus, Sparkles, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Pencil, Plus, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -8,13 +8,22 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ApiError } from "@/api/client";
 import { useCalendarOverview } from "@/hooks/use-calendar";
 import { useEvents } from "@/hooks/use-events";
-import { useConfirmPlanningRun, useCreatePlanningRun } from "@/hooks/use-planning";
+import { useConfirmPlanningRun, useCreatePlanningRun, useReschedulePractice } from "@/hooks/use-planning";
 import { useUsers } from "@/hooks/use-users";
+import { errorMessage } from "@/hooks/query-keys";
 import { eventColor } from "@/lib/eventColor";
+import { userColor } from "@/lib/userColor";
 import { localPartsToIso } from "@/lib/datetime";
-import type { PlanningRecommendationRead, PlanningRunRead, PlanningSessionRecommendationGroup } from "@/api/types";
+import type {
+  PlanningRecommendationRead,
+  PlanningRunRead,
+  PlanningSessionRecommendationGroup,
+  PracticeSessionRead,
+  RescheduleConflictDetail,
+} from "@/api/types";
 
 const DAY_START_MIN = 7 * 60;
 const DAY_END_MIN = 24 * 60;
@@ -54,18 +63,10 @@ function fmtHourLabel(mins: number): string {
   return `${hh} ${h < 12 ? "AM" : "PM"}`;
 }
 
-interface DragState {
-  runId: string;
-  rec: PlanningRecommendationRead;
-  groupLabel: string;
-  startClientX: number;
-  startClientY: number;
-  origDay: number;
-  origStartMin: number;
-  durationMin: number;
-  moved: boolean;
-  finalDay: number;
-  finalStartMin: number;
+function formatTimeRange(startIso: string, endIso: string): string {
+  const start = new Date(startIso);
+  const end = new Date(endIso);
+  return `${format(start, "EEE MMM d, h:mm a")} – ${format(end, "h:mm a")}`;
 }
 
 interface PendingFallback {
@@ -75,19 +76,38 @@ interface PendingFallback {
   override?: { start_at: string; end_at: string };
 }
 
+type DragBlockKind = "suggested" | "confirmed";
+
+interface DragPreview {
+  kind: DragBlockKind;
+  id: string;
+  day: number;
+  startMin: number;
+}
+
+interface PendingReschedule {
+  session: PracticeSessionRead;
+  startIso: string;
+  endIso: string;
+  conflict: RescheduleConflictDetail;
+}
+
 export function CalendarPage() {
   const { data: events, isError: eventsError } = useEvents();
   const { data: users } = useUsers();
   const createRun = useCreatePlanningRun();
   const confirmRun = useConfirmPlanningRun();
+  const reschedulePractice = useReschedulePractice();
 
   const [anchor, setAnchor] = useState(() => new Date());
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [activeRun, setActiveRun] = useState<PlanningRunRead | null>(null);
   const [dismissedResultIds, setDismissedResultIds] = useState<Set<string>>(new Set());
-  const [dragPreview, setDragPreview] = useState<{ resultId: string; day: number; startMin: number } | null>(null);
+  const [dragPreview, setDragPreview] = useState<DragPreview | null>(null);
   const [pendingFallback, setPendingFallback] = useState<PendingFallback | null>(null);
+  const [editMode, setEditMode] = useState(false);
+  const [pendingReschedule, setPendingReschedule] = useState<PendingReschedule | null>(null);
 
   const gridRef = useRef<HTMLDivElement>(null);
   const detachDragRef = useRef<(() => void) | null>(null);
@@ -204,20 +224,17 @@ export function CalendarPage() {
     setPendingFallback(null);
   }
 
-  function startDrag(
+  function beginBlockDrag(
     e: React.MouseEvent,
-    group: PlanningSessionRecommendationGroup,
-    rec: PlanningRecommendationRead,
+    kind: DragBlockKind,
+    id: string,
     day: number,
     startMin: number,
     durationMin: number,
+    onDrop: (finalDay: number, finalStartMin: number, moved: boolean) => void,
   ) {
-    if (!rec.id || !activeRun) return;
     e.preventDefault();
-    const drag: DragState = {
-      runId: activeRun.id,
-      rec,
-      groupLabel: group.dance_name,
+    const drag = {
       startClientX: e.clientX,
       startClientY: e.clientY,
       origDay: day,
@@ -227,7 +244,7 @@ export function CalendarPage() {
       finalDay: day,
       finalStartMin: startMin,
     };
-    setDragPreview({ resultId: rec.id, day, startMin });
+    setDragPreview({ kind, id, day, startMin });
 
     function onMove(ev: MouseEvent) {
       const grid = gridRef.current;
@@ -241,25 +258,12 @@ export function CalendarPage() {
       const newStartMin = Math.max(DAY_START_MIN, Math.min(DAY_END_MIN - drag.durationMin, drag.origStartMin + deltaMin));
       drag.finalDay = newDay;
       drag.finalStartMin = newStartMin;
-      setDragPreview({ resultId: drag.rec.id!, day: newDay, startMin: newStartMin });
+      setDragPreview({ kind, id, day: newDay, startMin: newStartMin });
     }
 
     function onUp() {
       detach();
-      setDragPreview(null);
-      if (!drag.moved) {
-        commitConfirm(drag.runId, drag.rec, drag.groupLabel);
-        return;
-      }
-      const dateStr = dayDateStrings[drag.finalDay];
-      const startParts = addMinutesToDateTime(dateStr, drag.finalStartMin);
-      const endParts = addMinutesToDateTime(dateStr, drag.finalStartMin + drag.durationMin);
-      // Grid coordinates are in the viewer's timezone (see gridPlacement), so they
-      // must be converted back from it -- using the organizer's timezone here made a
-      // dropped block land at a different instant than the one it was dropped on.
-      const startIso = localPartsToIso(startParts.date, startParts.time, GRID_TIME_ZONE);
-      const endIso = localPartsToIso(endParts.date, endParts.time, GRID_TIME_ZONE);
-      commitConfirm(drag.runId, drag.rec, drag.groupLabel, { start_at: startIso, end_at: endIso });
+      onDrop(drag.finalDay, drag.finalStartMin, drag.moved);
     }
 
     function detach() {
@@ -271,6 +275,79 @@ export function CalendarPage() {
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
     detachDragRef.current = detach;
+  }
+
+  function startDrag(
+    e: React.MouseEvent,
+    group: PlanningSessionRecommendationGroup,
+    rec: PlanningRecommendationRead,
+    day: number,
+    startMin: number,
+    durationMin: number,
+  ) {
+    if (!rec.id || !activeRun) return;
+    const runId = activeRun.id;
+    const recId = rec.id;
+    beginBlockDrag(e, "suggested", recId, day, startMin, durationMin, (finalDay, finalStartMin, moved) => {
+      setDragPreview(null);
+      if (!moved) {
+        commitConfirm(runId, rec, group.dance_name);
+        return;
+      }
+      const dateStr = dayDateStrings[finalDay];
+      const startParts = addMinutesToDateTime(dateStr, finalStartMin);
+      const endParts = addMinutesToDateTime(dateStr, finalStartMin + durationMin);
+      // Grid coordinates are in the viewer's timezone (see gridPlacement), so they
+      // must be converted back from it -- using the organizer's timezone here made a
+      // dropped block land at a different instant than the one it was dropped on.
+      const startIso = localPartsToIso(startParts.date, startParts.time, GRID_TIME_ZONE);
+      const endIso = localPartsToIso(endParts.date, endParts.time, GRID_TIME_ZONE);
+      commitConfirm(runId, rec, group.dance_name, { start_at: startIso, end_at: endIso });
+    });
+  }
+
+  function startConfirmedDrag(
+    e: React.MouseEvent,
+    session: PracticeSessionRead,
+    day: number,
+    startMin: number,
+    durationMin: number,
+  ) {
+    beginBlockDrag(e, "confirmed", session.id, day, startMin, durationMin, (finalDay, finalStartMin, moved) => {
+      if (!moved) {
+        setDragPreview(null);
+        return;
+      }
+      const dateStr = dayDateStrings[finalDay];
+      const startParts = addMinutesToDateTime(dateStr, finalStartMin);
+      const endParts = addMinutesToDateTime(dateStr, finalStartMin + durationMin);
+      const startIso = localPartsToIso(startParts.date, startParts.time, GRID_TIME_ZONE);
+      const endIso = localPartsToIso(endParts.date, endParts.time, GRID_TIME_ZONE);
+      attemptReschedule(session, startIso, endIso);
+    });
+  }
+
+  function attemptReschedule(session: PracticeSessionRead, startIso: string, endIso: string, override = false) {
+    reschedulePractice.mutate(
+      { practiceId: session.id, body: { start_at: startIso, end_at: endIso, override_conflicts: override } },
+      {
+        onSuccess: () => {
+          setDragPreview(null);
+          setPendingReschedule(null);
+        },
+        onError: (error) => {
+          if (error instanceof ApiError && error.status === 409 && error.detail && typeof error.detail === "object") {
+            // Keep the drag preview showing the dropped position while the dialog is
+            // open, so the block doesn't jump back until the user actually cancels.
+            setPendingReschedule({ session, startIso, endIso, conflict: error.detail });
+            return;
+          }
+          setDragPreview(null);
+          setPendingReschedule(null);
+          toast.error(errorMessage(error));
+        },
+      },
+    );
   }
 
   async function handleSuggestSessions() {
@@ -340,7 +417,7 @@ export function CalendarPage() {
       // when the top one is dismissed.
       const rec = group.recommendations.find((item) => item.id && !dismissedResultIds.has(item.id));
       if (!rec || !rec.id) continue;
-      const preview = dragPreview?.resultId === rec.id ? dragPreview : null;
+      const preview = dragPreview?.kind === "suggested" && dragPreview.id === rec.id ? dragPreview : null;
       const placement = preview ?? gridPlacement(rec.start_at);
       if (!placement) continue;
       const durationMin = Math.round((new Date(rec.end_at).getTime() - new Date(rec.start_at).getTime()) / 60000);
@@ -363,7 +440,7 @@ export function CalendarPage() {
   }, [activeRun, dismissedResultIds, dragPreview, dayDateStrings, eventsById, usersById]);
 
   const busyBlocks = useMemo(() => {
-    const blocks: Array<{ key: string; day: number; startMin: number; durationMin: number; label: string }> = [];
+    const blocks: Array<{ key: string; day: number; startMin: number; durationMin: number; label: string; color: string }> = [];
     for (const interval of overview?.busy_intervals ?? []) {
       const placement = gridPlacement(interval.start_at);
       if (!placement) continue;
@@ -376,6 +453,7 @@ export function CalendarPage() {
         startMin: placement.startMin,
         durationMin,
         label: usersById.get(interval.user_id)?.display_name ?? "Someone",
+        color: userColor(interval.user_id),
       });
     }
     return blocks;
@@ -383,13 +461,23 @@ export function CalendarPage() {
   }, [overview, usersById, dayDateStrings]);
 
   const confirmedBlocks = useMemo(() => {
-    const blocks: Array<{ key: string; day: number; startMin: number; durationMin: number; color: string; label: string; timeLabel: string }> = [];
+    const blocks: Array<{
+      key: string;
+      day: number;
+      startMin: number;
+      durationMin: number;
+      color: string;
+      label: string;
+      timeLabel: string;
+      session: PracticeSessionRead;
+    }> = [];
     for (const session of overview?.practice_sessions ?? []) {
       const event = eventsById.get(session.dance_event_id);
       if (!event || !checkedIds.has(event.id)) continue;
-      const placement = gridPlacement(session.start_at);
-      if (!placement) continue;
       const durationMin = Math.round((new Date(session.end_at).getTime() - new Date(session.start_at).getTime()) / 60000);
+      const preview = dragPreview?.kind === "confirmed" && dragPreview.id === session.id ? dragPreview : null;
+      const placement = preview ?? gridPlacement(session.start_at);
+      if (!placement) continue;
       blocks.push({
         key: `confirmed-${session.id}`,
         day: placement.day,
@@ -398,11 +486,12 @@ export function CalendarPage() {
         color: eventColor(session.dance_event_id),
         label: event.name,
         timeLabel: fmtHourLabel(placement.startMin),
+        session,
       });
     }
     return blocks;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [overview, eventsById, checkedIds, dayDateStrings]);
+  }, [overview, eventsById, checkedIds, dayDateStrings, dragPreview]);
 
   const hourLabels = Array.from({ length: NUM_HOURS + 1 }, (_, i) => fmtHourLabel(DAY_START_MIN + i * 60));
 
@@ -435,6 +524,9 @@ export function CalendarPage() {
             </Button>
           </div>
         </div>
+        <Button variant={editMode ? "default" : "outline"} size="sm" onClick={() => setEditMode((prev) => !prev)}>
+          <Pencil className="size-4" /> {editMode ? "Done editing" : "Edit calendar"}
+        </Button>
       </div>
 
       <div className="flex gap-5 items-start flex-1 min-h-0">
@@ -547,9 +639,9 @@ export function CalendarPage() {
                         left: `calc(${block.day * widthPct}% + 3px)`,
                         width: `calc(${widthPct}% - 6px)`,
                         borderRadius: 6,
-                        border: "1px solid rgba(0,0,0,0.12)",
-                        backgroundImage:
-                          "repeating-linear-gradient(45deg, rgba(0,0,0,0.07) 0 6px, transparent 6px 12px)",
+                        border: `1px solid ${block.color}`,
+                        borderLeft: `3px solid ${block.color}`,
+                        background: `${block.color}33`,
                         boxSizing: "border-box",
                         pointerEvents: "none",
                       }}
@@ -564,6 +656,11 @@ export function CalendarPage() {
                   return (
                     <div
                       key={block.key}
+                      onMouseDown={
+                        editMode
+                          ? (e) => startConfirmedDrag(e, block.session, block.day, block.startMin, block.durationMin)
+                          : undefined
+                      }
                       style={{
                         position: "absolute",
                         top,
@@ -577,6 +674,10 @@ export function CalendarPage() {
                         boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
                         overflow: "hidden",
                         boxSizing: "border-box",
+                        cursor: editMode ? "grab" : "default",
+                        outline: editMode ? "2px dashed rgba(255,255,255,0.7)" : "none",
+                        outlineOffset: -4,
+                        userSelect: editMode ? "none" : undefined,
                       }}
                     >
                       <div className="text-xs font-bold truncate">{block.label}</div>
@@ -647,6 +748,49 @@ export function CalendarPage() {
             </Button>
             <Button variant="destructive" onClick={confirmPendingFallback}>
               Confirm anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(pendingReschedule)}
+        onOpenChange={(open) => {
+          if (open) return;
+          setPendingReschedule(null);
+          setDragPreview(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Scheduling conflict</DialogTitle>
+          </DialogHeader>
+          {pendingReschedule && (
+            <p className="text-sm text-muted-foreground">
+              This time conflicts with <strong>{pendingReschedule.conflict.conflicting_label}</strong> (
+              {formatTimeRange(pendingReschedule.conflict.conflicting_start_at, pendingReschedule.conflict.conflicting_end_at)}
+              ) on the same {pendingReschedule.conflict.conflict_type === "room" ? "room" : "participant"}. Move
+              anyway?
+            </p>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setPendingReschedule(null);
+                setDragPreview(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() =>
+                pendingReschedule &&
+                attemptReschedule(pendingReschedule.session, pendingReschedule.startIso, pendingReschedule.endIso, true)
+              }
+            >
+              Move anyway
             </Button>
           </DialogFooter>
         </DialogContent>

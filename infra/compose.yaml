@@ -18,11 +18,7 @@ services:
       - ../.env
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/scheduler
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8000}
-      OAUTH_STATE_SECRET: ${OAUTH_STATE_SECRET}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/v1/google/oauth/callback}
     ports:
       - "8000:8000"

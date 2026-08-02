@@ -16,6 +16,8 @@ import type {
   PlanningRunConfirmResponse,
   PlanningRunCreate,
   PlanningRunRead,
+  PracticeRescheduleRequest,
+  PracticeRescheduleResponse,
   PracticeSessionRead,
   PracticeUnscheduleResponse,
   UserCreate,
@@ -65,6 +67,8 @@ export const calendarApi = {
 export const practicesApi = {
   unschedule: (practiceId: string) =>
     api.delete<PracticeUnscheduleResponse>(`/practices/${practiceId}/schedule`),
+  reschedule: (practiceId: string, body: PracticeRescheduleRequest) =>
+    api.patch<PracticeRescheduleResponse>(`/practices/${practiceId}/schedule`, body),
 };
 
 export const googleCalendarApi = {
