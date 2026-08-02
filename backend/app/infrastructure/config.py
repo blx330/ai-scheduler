@@ -14,7 +14,6 @@ class Settings(BaseSettings):
     app_name: str = "dance-practice-scheduler"
     api_prefix: str = "/api/v1"
     database_url: str = "postgresql+psycopg://postgres:postgres@db:5432/scheduler"
-    app_base_url: str = "http://localhost:8000"
     frontend_url: str = "http://localhost:8000"
     oauth_state_secret: Optional[str] = Field(default=None, validation_alias="OAUTH_STATE_SECRET")
     gemini_api_key: str = Field(default="", validation_alias="GEMINI_API_KEY")

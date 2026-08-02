@@ -97,7 +97,6 @@ DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/scheduler
 
 Variables currently read by backend settings (`backend/app/infrastructure/config.py`):
 - `DATABASE_URL`
-- `APP_BASE_URL`
 - `FRONTEND_URL`
 - `GEMINI_API_KEY` (optional; if set, the Gemini-backed preference parser is used, model `gemini-2.5-flash` via the `google-genai` SDK; if unset, a deterministic stub parser is used instead)
 - `OAUTH_STATE_SECRET` (needed for Google OAuth flow)
