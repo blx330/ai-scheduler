@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+**/.venv/
+**/.venv_local/
+**/.venv_verify/
+**/__pycache__/
+frontend/node_modules
+frontend/dist
+backend/app/static
+PROJECT_SNAPSHOT_*.md

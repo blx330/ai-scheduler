@@ -1,7 +1,8 @@
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_google_calendar_client, get_settings
@@ -55,7 +56,7 @@ def confirm_planning_results(
     client: GoogleCalendarProvider = Depends(get_google_calendar_client),
 ) -> PlanningRunConfirmResponse:
     try:
-        run, confirmed_sessions = PlanningService(db).confirm_results(
+        run, confirmed_sessions, warnings = PlanningService(db).confirm_results(
             run_id,
             payload.confirmed_result_ids,
             manual_time_overrides=payload.manual_time_overrides,
@@ -68,6 +69,7 @@ def confirm_planning_results(
     return PlanningRunConfirmResponse(
         planning_run_id=run.id,
         confirmed_sessions=[serialize_practice_session(session) for session in confirmed_sessions],
+        warnings=warnings,
     )
 
 
@@ -75,10 +77,18 @@ def confirm_planning_results(
 def get_calendar_overview(
     start: datetime,
     end: datetime,
+    user_ids: Annotated[list[UUID], Query()] = [],
     db: Session = Depends(get_db),
 ) -> CalendarOverviewRead:
+    # Every other datetime input rejects naive values; without this the same naive
+    # string here was silently relabelled as UTC, shifting the whole window.
+    for value, name in ((start, "start"), (end, "end")):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise HTTPException(status_code=422, detail=f"{name}: Datetime must include timezone information")
     try:
-        busy_intervals, practice_sessions = PlanningService(db).get_calendar_overview(start, end)
+        busy_intervals, practice_sessions = PlanningService(db).get_calendar_overview(
+            start, end, user_ids=user_ids
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return CalendarOverviewRead(
