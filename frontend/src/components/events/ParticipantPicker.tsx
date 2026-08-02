@@ -7,6 +7,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { ParticipantRole, UserRead } from "@/api/types";
+import { userColor } from "@/lib/userColor";
 
 export type ParticipantSelection = ParticipantRole | "none";
 
@@ -27,7 +28,10 @@ export function ParticipantPicker({
     <div className="space-y-2 rounded-md border p-3">
       {users.map((user) => (
         <div key={user.id} className="flex items-center justify-between gap-2">
-          <Label className="font-normal">{user.display_name}</Label>
+          <div className="flex items-center gap-2">
+            <span className="size-2.5 rounded-full shrink-0" style={{ background: userColor(user.id) }} />
+            <Label className="font-normal">{user.display_name}</Label>
+          </div>
           <Select
             value={value[user.id] ?? "none"}
             onValueChange={(selection) => onChange(user.id, selection as ParticipantSelection)}

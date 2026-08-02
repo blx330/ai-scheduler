@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Card, CardContent } from "@/components/ui/card";
 import { CreateMemberDialog } from "@/components/people/CreateMemberDialog";
 import { useUsers } from "@/hooks/use-users";
+import { userColor } from "@/lib/userColor";
 
 function initialsFor(name: string): string {
   return name
@@ -41,7 +42,10 @@ export function MembersPage() {
               onClick={() => navigate(`/members/${user.id}`)}
               className="w-full flex items-center gap-3.5 px-4 py-3.5 border-b last:border-b-0 text-left hover:bg-accent/40 transition-colors"
             >
-              <div className="size-9 rounded-full bg-black/[0.06] border flex items-center justify-center font-bold text-sm text-foreground/70 shrink-0">
+              <div
+                className="size-9 rounded-full border flex items-center justify-center font-bold text-sm text-foreground/70 shrink-0"
+                style={{ background: userColor(user.id) }}
+              >
                 {initialsFor(user.display_name)}
               </div>
               <div className="flex-1 min-w-0">

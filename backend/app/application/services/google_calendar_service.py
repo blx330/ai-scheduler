@@ -303,6 +303,42 @@ class GoogleCalendarService:
         self.db.refresh(practice_session)
         return created_event
 
+    def update_event_for_practice_session(self, practice_session_id: UUID) -> GoogleCreatedEvent:
+        practice_session = self.db.scalars(
+            select(PracticeSession)
+            .where(PracticeSession.id == practice_session_id)
+            .options(selectinload(PracticeSession.dance_event).selectinload(DanceEvent.organizer))
+        ).one_or_none()
+        if practice_session is None:
+            raise ValueError("Practice session not found")
+        if not practice_session.google_calendar_event_id:
+            raise ValueError("Practice session has no linked Google Calendar event")
+
+        dance_event = practice_session.dance_event
+        connection = self._require_connection(dance_event.organizer_user_id)
+        self._ensure_connection_has_scope(
+            connection,
+            GOOGLE_WRITE_SCOPES,
+            "Google Calendar connection is missing write access. Reconnect Google and grant calendar access.",
+        )
+        access_token = self._ensure_access_token(connection)
+        target_calendar_id = practice_session.google_calendar_id or connection.selected_write_calendar_id or "primary"
+
+        updated_event = self.client.update_event(
+            access_token=access_token,
+            calendar_id=target_calendar_id,
+            event_id=practice_session.google_calendar_event_id,
+            start_at=ensure_utc(practice_session.start_at),
+            end_at=ensure_utc(practice_session.end_at),
+            timezone_name=dance_event.organizer.timezone,
+        )
+
+        practice_session.google_calendar_html_link = updated_event.html_link
+        self.db.add(practice_session)
+        self.db.commit()
+        self.db.refresh(practice_session)
+        return updated_event
+
     def delete_event_for_practice_session(self, practice_session_id: UUID) -> bool:
         practice_session = self.db.scalars(
             select(PracticeSession)

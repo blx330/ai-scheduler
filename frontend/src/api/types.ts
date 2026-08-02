@@ -227,6 +227,27 @@ export interface PracticeUnscheduleResponse {
   warning: string | null;
 }
 
+export interface PracticeRescheduleRequest {
+  start_at: string;
+  end_at: string;
+  override_conflicts?: boolean;
+}
+
+export interface PracticeRescheduleResponse {
+  practice: PracticeSessionRead;
+  google_event_updated: boolean;
+  warning: string | null;
+}
+
+export interface RescheduleConflictDetail {
+  message: string;
+  conflict_type: "room" | "participant";
+  conflicting_practice_id: string;
+  conflicting_label: string;
+  conflicting_start_at: string;
+  conflicting_end_at: string;
+}
+
 export interface GoogleOAuthStartResponse {
   authorization_url: string;
 }
@@ -266,5 +287,5 @@ export interface GoogleBusySyncResponse {
 }
 
 export interface ApiErrorBody {
-  detail: string;
+  detail: string | RescheduleConflictDetail;
 }

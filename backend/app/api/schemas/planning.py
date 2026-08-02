@@ -227,3 +227,26 @@ class PracticeUnscheduleResponse(BaseModel):
     unscheduled: bool
     google_event_deleted: bool
     warning: Optional[str] = None
+
+
+class PracticeRescheduleRequest(BaseModel):
+    start_at: datetime
+    end_at: datetime
+    override_conflicts: bool = False
+
+    @field_validator("start_at", "end_at")
+    @classmethod
+    def validate_datetimes(cls, value: datetime) -> datetime:
+        return _validate_timezone_aware(value)
+
+    @model_validator(mode="after")
+    def validate_end_after_start(self) -> "PracticeRescheduleRequest":
+        if self.end_at <= self.start_at:
+            raise ValueError("Rescheduled slot end must be after start")
+        return self
+
+
+class PracticeRescheduleResponse(BaseModel):
+    practice: PracticeSessionRead
+    google_event_updated: bool
+    warning: Optional[str] = None
