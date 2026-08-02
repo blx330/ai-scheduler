@@ -556,6 +556,124 @@ def test_event_can_be_archived_and_deleted(client) -> None:
     assert get_response.status_code == 404
 
 
+def _run_for_override_tests(client):
+    """A planning run with one confirmable result, organizer in UTC."""
+    organizer = _create_user(client, "Coach Override", "coach-override@example.com")
+    dancer = _create_user(client, "Override Dancer", "override-dancer@example.com")
+    _add_availability(client, dancer["id"], "2026-04-01T09:00:00Z", "2026-04-01T12:00:00Z")
+    event = _create_event(
+        client,
+        name="Override Me",
+        organizer_user_id=organizer["id"],
+        duration_minutes=60,
+        latest_schedule_at="2026-04-01T12:00:00Z",
+        required_session_count=1,
+        participants=[{"user_id": dancer["id"], "role": "required"}],
+    )
+    run = _create_planning_run(
+        client,
+        event_ids=[event["id"]],
+        horizon_start="2026-04-01T09:00:00Z",
+        horizon_end="2026-04-01T12:00:00Z",
+    ).json()
+    result_id = run["results"][0]["recommendations"][0]["id"]
+    return run, result_id
+
+
+def test_confirm_rejects_override_inside_the_forbidden_overnight_window(client) -> None:
+    run, result_id = _run_for_override_tests(client)
+
+    response = client.post(
+        f"/api/v1/planning-runs/{run['id']}/confirm",
+        json={
+            "confirmations": [
+                {"result_id": result_id, "start_at": "2026-04-01T03:00:00Z", "end_at": "2026-04-01T04:00:00Z"}
+            ]
+        },
+    )
+
+    assert response.status_code == 400
+    assert "8:00 AM" in response.json()["detail"]
+
+
+def test_confirm_rejects_override_past_the_event_deadline(client) -> None:
+    run, result_id = _run_for_override_tests(client)
+
+    response = client.post(
+        f"/api/v1/planning-runs/{run['id']}/confirm",
+        json={
+            "confirmations": [
+                {"result_id": result_id, "start_at": "2026-06-01T10:00:00Z", "end_at": "2026-06-01T11:00:00Z"}
+            ]
+        },
+    )
+
+    assert response.status_code == 400
+    assert "deadline" in response.json()["detail"].lower()
+
+
+def test_confirm_rejects_override_that_changes_the_session_duration(client) -> None:
+    run, result_id = _run_for_override_tests(client)
+
+    response = client.post(
+        f"/api/v1/planning-runs/{run['id']}/confirm",
+        json={
+            "confirmations": [
+                {"result_id": result_id, "start_at": "2026-04-01T10:00:00Z", "end_at": "2026-04-01T10:05:00Z"}
+            ]
+        },
+    )
+
+    assert response.status_code == 400
+    assert "duration" in response.json()["detail"].lower()
+
+
+def test_confirm_accepts_a_valid_override(client) -> None:
+    run, result_id = _run_for_override_tests(client)
+
+    response = client.post(
+        f"/api/v1/planning-runs/{run['id']}/confirm",
+        json={
+            "confirmations": [
+                {"result_id": result_id, "start_at": "2026-04-01T11:00:00Z", "end_at": "2026-04-01T12:00:00Z"}
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    confirmed = response.json()["confirmed_sessions"]
+    assert len(confirmed) == 1
+    assert confirmed[0]["start_at"] == "2026-04-01T11:00:00Z"
+
+
+def test_event_with_planning_results_can_be_deleted(client) -> None:
+    organizer = _create_user(client, "Coach Purge", "coach-purge@example.com")
+    dancer = _create_user(client, "Purge Dancer", "purge-dancer@example.com")
+    _add_availability(client, dancer["id"], "2026-04-01T09:00:00Z", "2026-04-01T12:00:00Z")
+    event = _create_event(
+        client,
+        name="Purge Me",
+        organizer_user_id=organizer["id"],
+        duration_minutes=60,
+        latest_schedule_at="2026-04-01T12:00:00Z",
+        required_session_count=1,
+        participants=[{"user_id": dancer["id"], "role": "required"}],
+    )
+
+    run_response = _create_planning_run(
+        client,
+        event_ids=[event["id"]],
+        horizon_start="2026-04-01T09:00:00Z",
+        horizon_end="2026-04-01T12:00:00Z",
+    )
+    assert run_response.status_code == 200
+    assert run_response.json()["results"], "planning run must produce results for this to be a regression test"
+
+    delete_response = client.delete(f"/api/v1/events/{event['id']}")
+    assert delete_response.status_code == 204
+    assert client.get(f"/api/v1/events/{event['id']}").status_code == 404
+
+
 def test_user_cannot_be_deleted_while_assigned_to_dance(client) -> None:
     organizer = _create_user(client, "Coach Protect", "coach-protect@example.com")
     dancer = _create_user(client, "Protected Dancer", "protected-dancer@example.com")

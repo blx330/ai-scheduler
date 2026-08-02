@@ -1,9 +1,14 @@
-from datetime import time
 from zoneinfo import ZoneInfo
 
 from app.domain.availability.interval_ops import interval_covered
 from app.domain.availability.models import Interval
 from app.domain.common.enums import Weekday
+from app.domain.common.time_of_day import (
+    contained_in_range,
+    overlap_minutes,
+    overlaps_range,
+    slot_minutes,
+)
 from app.domain.preferences.models import ParsedPreference, TimeRangePreference
 from app.domain.scheduling.models import ParticipantContext, ScheduleParticipantStatus, ScheduleResult, ScheduleSlot
 
@@ -15,6 +20,26 @@ DISALLOWED_TIME_RANGE_SCORE = -1.0
 TIME_TIER_1_SCORE = 6.0
 TIME_TIER_2_SCORE = 3.0
 TIME_TIER_3_SCORE = 1.0
+
+# (start minutes, end minutes, score) in organizer-local time. Anything not covered
+# here scores TIME_TIER_3_SCORE.
+TIME_TIERS = (
+    (18 * 60, 22 * 60, TIME_TIER_1_SCORE),
+    (16 * 60, 18 * 60, TIME_TIER_2_SCORE),
+    (22 * 60, 24 * 60, TIME_TIER_2_SCORE),
+)
+
+# datetime.weekday() index -> Weekday. strftime("%a") would honour LC_TIME and raise
+# a ValueError under a non-English locale.
+WEEKDAY_BY_INDEX = (
+    Weekday.MON,
+    Weekday.TUE,
+    Weekday.WED,
+    Weekday.THU,
+    Weekday.FRI,
+    Weekday.SAT,
+    Weekday.SUN,
+)
 
 
 def score_slot(slot: ScheduleSlot, participants: list[ParticipantContext], timezone_name: str = "UTC") -> ScheduleResult:
@@ -64,8 +89,9 @@ def preference_bonus_for_user(slot: ScheduleSlot, preference: ParsedPreference, 
     zone = ZoneInfo(timezone_name)
     local_start = slot.start_at.astimezone(zone)
     local_end = slot.end_at.astimezone(zone)
+    start_minutes, end_minutes = slot_minutes(local_start, local_end)
 
-    weekday_value = Weekday(local_start.strftime("%a").upper()[:3])
+    weekday_value = WEEKDAY_BY_INDEX[local_start.weekday()]
     weekday_score = 0.0
     weekday_signal = 0.0
     if weekday_value in preference.disallowed_weekdays:
@@ -77,10 +103,10 @@ def preference_bonus_for_user(slot: ScheduleSlot, preference: ParsedPreference, 
 
     time_score = 0.0
     time_signal = 0.0
-    if overlaps_any_range(local_start.time(), local_end.time(), preference.disallowed_time_ranges):
+    if overlaps_any_range(start_minutes, end_minutes, preference.disallowed_time_ranges):
         time_score = DISALLOWED_TIME_RANGE_SCORE
         time_signal = 1.0
-    elif _matches_any_range(local_start.time(), local_end.time(), preference.preferred_time_ranges):
+    elif _matches_any_range(start_minutes, end_minutes, preference.preferred_time_ranges):
         time_score = PREFERRED_TIME_RANGE_SCORE
         time_signal = 1.0
 
@@ -88,45 +114,42 @@ def preference_bonus_for_user(slot: ScheduleSlot, preference: ParsedPreference, 
 
 
 def score_time_tier(slot: ScheduleSlot, timezone_name: str) -> float:
+    """Time-of-day score, weighted by how much of the slot falls in each tier.
+
+    Scoring by containment instead would drop every boundary-straddling slot into
+    the lowest tier, making the ranking non-monotonic: a 17:00-19:00 practice would
+    score below both 16:00-18:00 and 18:00-20:00.
+    """
     zone = ZoneInfo(timezone_name)
-    local_start = slot.start_at.astimezone(zone).time()
-    local_end = slot.end_at.astimezone(zone).time()
+    start_minutes, end_minutes = slot_minutes(slot.start_at.astimezone(zone), slot.end_at.astimezone(zone))
+    duration = end_minutes - start_minutes
+    if duration <= 0:
+        return TIME_TIER_3_SCORE
 
-    if _time_in_range(local_start, local_end, time(18, 0), time(22, 0)):
-        return TIME_TIER_1_SCORE
-    if _time_in_range(local_start, local_end, time(16, 0), time(18, 0)):
-        return TIME_TIER_2_SCORE
-    if _time_in_range(local_start, local_end, time(22, 0), time(0, 0)):
-        return TIME_TIER_2_SCORE
-    return TIME_TIER_3_SCORE
-
-
-def _matches_any_range(start_at: time, end_at: time, ranges: list[TimeRangePreference]) -> bool:
-    return any(start_at >= _to_time(item.start_local) and end_at <= _to_time(item.end_local) for item in ranges)
-
-
-def overlaps_any_range(start_at: time, end_at: time, ranges: list[TimeRangePreference]) -> bool:
-    return any(start_at < _to_time(item.end_local) and end_at > _to_time(item.start_local) for item in ranges)
+    weighted_total = 0.0
+    tiered_minutes = 0
+    for range_start, range_end, tier_score in TIME_TIERS:
+        overlap = overlap_minutes(start_minutes, end_minutes, range_start, range_end)
+        weighted_total += overlap * tier_score
+        tiered_minutes += overlap
+    weighted_total += max(0, duration - tiered_minutes) * TIME_TIER_3_SCORE
+    return round(weighted_total / duration, 2)
 
 
-def _to_time(value: str) -> time:
+def _matches_any_range(start_minutes: int, end_minutes: int, ranges: list[TimeRangePreference]) -> bool:
+    return any(
+        contained_in_range(start_minutes, end_minutes, *_range_bounds(item)) for item in ranges
+    )
+
+
+def overlaps_any_range(start_minutes: int, end_minutes: int, ranges: list[TimeRangePreference]) -> bool:
+    return any(overlaps_range(start_minutes, end_minutes, *_range_bounds(item)) for item in ranges)
+
+
+def _range_bounds(item: TimeRangePreference) -> tuple[int, int]:
+    return _to_minutes(item.start_local), _to_minutes(item.end_local)
+
+
+def _to_minutes(value: str) -> int:
     hour, minute = value.split(":")
-    return time(hour=int(hour), minute=int(minute))
-
-
-def _time_in_range(start_at: time, end_at: time, range_start: time, range_end: time) -> bool:
-    """
-    Returns true when the full slot is contained in [range_start, range_end).
-    Handles a wrapping end boundary (e.g. 22:00 -> 00:00).
-    """
-    slot_start_minutes = start_at.hour * 60 + start_at.minute
-    slot_end_minutes = end_at.hour * 60 + end_at.minute
-    if slot_end_minutes <= slot_start_minutes:
-        slot_end_minutes += 24 * 60
-
-    range_start_minutes = range_start.hour * 60 + range_start.minute
-    range_end_minutes = range_end.hour * 60 + range_end.minute
-    if range_end_minutes <= range_start_minutes:
-        range_end_minutes += 24 * 60
-
-    return slot_start_minutes >= range_start_minutes and slot_end_minutes <= range_end_minutes
+    return int(hour) * 60 + int(minute)

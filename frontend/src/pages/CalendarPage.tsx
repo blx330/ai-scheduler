@@ -21,6 +21,10 @@ const DAY_END_MIN = 24 * 60;
 const PX_PER_MIN = 72 / 60;
 const NUM_HOURS = (DAY_END_MIN - DAY_START_MIN) / 60;
 
+// The grid's day columns are built from the viewer's clock, so every conversion
+// between a grid coordinate and an instant has to use the same zone.
+const GRID_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
 function minutesToHHMM(mins: number): string {
   const clamped = ((mins % 1440) + 1440) % 1440;
   const h = Math.floor(clamped / 60);
@@ -34,6 +38,16 @@ function addMinutesToDateTime(dateStr: string, minutesOfDay: number): { date: st
   return { date: rolledDate, time: minutesToHHMM(minutesOfDay) };
 }
 
+/**
+ * Never ask the planner for slots that have already passed. The viewed week starts on
+ * Monday, so from Friday onward an unclamped horizon happily proposed (and let you
+ * confirm) sessions earlier in the same week.
+ */
+function planningHorizonStart(weekStart: Date): Date {
+  const now = new Date();
+  return weekStart.getTime() < now.getTime() ? now : weekStart;
+}
+
 function fmtHourLabel(mins: number): string {
   const h = Math.floor(mins / 60) % 24;
   const hh = h % 12 === 0 ? 12 : h % 12;
@@ -44,7 +58,6 @@ interface DragState {
   runId: string;
   rec: PlanningRecommendationRead;
   groupLabel: string;
-  organizerTz: string;
   startClientX: number;
   startClientY: number;
   origDay: number;
@@ -63,7 +76,7 @@ interface PendingFallback {
 }
 
 export function CalendarPage() {
-  const { data: events } = useEvents();
+  const { data: events, isError: eventsError } = useEvents();
   const { data: users } = useUsers();
   const createRun = useCreatePlanningRun();
   const confirmRun = useConfirmPlanningRun();
@@ -77,19 +90,32 @@ export function CalendarPage() {
   const [pendingFallback, setPendingFallback] = useState<PendingFallback | null>(null);
 
   const gridRef = useRef<HTMLDivElement>(null);
+  const detachDragRef = useRef<(() => void) | null>(null);
+
+  // Navigating away mid-drag would otherwise leave both window listeners attached and
+  // have them call setState on an unmounted tree.
+  useEffect(() => () => detachDragRef.current?.(), []);
+
+  // Ids we have already offered a default for. Without this, "absent from checkedIds"
+  // was indistinguishable from "deliberately unchecked", so every refetch (window
+  // focus, any confirm) silently re-checked everything the user had hidden.
+  const autoCheckedIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!events) return;
+    const liveIds = new Set(events.map((e) => e.id));
+    const newIds = events.filter((e) => !autoCheckedIds.current.has(e.id)).map((e) => e.id);
+    for (const id of newIds) autoCheckedIds.current.add(id);
+    for (const id of [...autoCheckedIds.current]) {
+      if (!liveIds.has(id)) autoCheckedIds.current.delete(id);
+    }
+
     setCheckedIds((prev) => {
-      const next = new Set(prev);
-      let changed = false;
-      for (const e of events) {
-        if (!next.has(e.id)) {
-          next.add(e.id);
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
+      const next = new Set<string>();
+      for (const id of prev) if (liveIds.has(id)) next.add(id); // drop deleted events
+      for (const id of newIds) next.add(id); // default new events to checked
+      const unchanged = next.size === prev.size && [...next].every((id) => prev.has(id));
+      return unchanged ? prev : next;
     });
   }, [events]);
 
@@ -98,24 +124,43 @@ export function CalendarPage() {
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
   const dayDateStrings = useMemo(() => days.map((d) => format(d, "yyyy-MM-dd")), [days]);
 
-  const { data: overview } = useCalendarOverview(weekStart.toISOString(), weekEnd.toISOString());
+  // Busy time for everyone taking part in a checked dance, so the grid can explain
+  // why a slot was not offered.
+  const relevantUserIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const event of events ?? []) {
+      if (!checkedIds.has(event.id)) continue;
+      ids.add(event.organizer_user_id);
+      for (const participant of event.participants) ids.add(participant.user_id);
+    }
+    return [...ids].sort();
+  }, [events, checkedIds]);
+
+  const { data: overview, isError: overviewError } = useCalendarOverview(
+    weekStart.toISOString(),
+    weekEnd.toISOString(),
+    relevantUserIds,
+  );
+  // An empty grid is indistinguishable from a backend outage without this.
+  const loadError = eventsError || overviewError;
 
   const eventsById = useMemo(() => new Map((events ?? []).map((e) => [e.id, e])), [events]);
   const usersById = useMemo(() => new Map((users ?? []).map((u) => [u.id, u])), [users]);
 
-  function organizerTzFor(danceEventId: string): string {
-    const event = eventsById.get(danceEventId);
-    const organizer = event ? usersById.get(event.organizer_user_id) : undefined;
-    return organizer?.timezone ?? "UTC";
-  }
-
-  function zonedDayAndMinutes(iso: string, tz: string): { day: number; startMin: number } | null {
-    const zoned = new Date(iso).toLocaleString("en-US", { timeZone: tz });
-    const d = new Date(zoned);
-    const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    const day = dayDateStrings.indexOf(dateStr);
+  /**
+   * Place an instant on the grid, in the same timezone the day columns are built in.
+   *
+   * Columns come from `startOfWeek(new Date())`, i.e. the viewer's timezone, so
+   * placement must use it too. Computing the date in the *organizer's* timezone
+   * instead meant a block could resolve to a date absent from the column list and be
+   * dropped with no indication -- routine whenever organizer and viewer differ.
+   */
+  function gridPlacement(iso: string): { day: number; startMin: number } | null {
+    const instant = new Date(iso);
+    if (Number.isNaN(instant.getTime())) return null;
+    const day = dayDateStrings.indexOf(format(instant, "yyyy-MM-dd"));
     if (day === -1) return null;
-    return { day, startMin: d.getHours() * 60 + d.getMinutes() };
+    return { day, startMin: instant.getHours() * 60 + instant.getMinutes() };
   }
 
   function blockTooltip(rec: PlanningRecommendationRead): string {
@@ -135,6 +180,9 @@ export function CalendarPage() {
     override?: { start_at: string; end_at: string },
   ) {
     if (!rec.id) return;
+    // The confirm round-trip also writes to Google Calendar and shows no immediate
+    // visual change, so without this an impatient second click double-submits.
+    if (confirmRun.isPending) return;
     if (rec.is_fallback) {
       setPendingFallback({ runId, resultId: rec.id, label, override });
       return;
@@ -166,12 +214,10 @@ export function CalendarPage() {
   ) {
     if (!rec.id || !activeRun) return;
     e.preventDefault();
-    const organizerTz = organizerTzFor(group.dance_event_id);
     const drag: DragState = {
       runId: activeRun.id,
       rec,
       groupLabel: group.dance_name,
-      organizerTz,
       startClientX: e.clientX,
       startClientY: e.clientY,
       origDay: day,
@@ -199,8 +245,7 @@ export function CalendarPage() {
     }
 
     function onUp() {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      detach();
       setDragPreview(null);
       if (!drag.moved) {
         commitConfirm(drag.runId, drag.rec, drag.groupLabel);
@@ -209,13 +254,23 @@ export function CalendarPage() {
       const dateStr = dayDateStrings[drag.finalDay];
       const startParts = addMinutesToDateTime(dateStr, drag.finalStartMin);
       const endParts = addMinutesToDateTime(dateStr, drag.finalStartMin + drag.durationMin);
-      const startIso = localPartsToIso(startParts.date, startParts.time, drag.organizerTz);
-      const endIso = localPartsToIso(endParts.date, endParts.time, drag.organizerTz);
+      // Grid coordinates are in the viewer's timezone (see gridPlacement), so they
+      // must be converted back from it -- using the organizer's timezone here made a
+      // dropped block land at a different instant than the one it was dropped on.
+      const startIso = localPartsToIso(startParts.date, startParts.time, GRID_TIME_ZONE);
+      const endIso = localPartsToIso(endParts.date, endParts.time, GRID_TIME_ZONE);
       commitConfirm(drag.runId, drag.rec, drag.groupLabel, { start_at: startIso, end_at: endIso });
+    }
+
+    function detach() {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      detachDragRef.current = null;
     }
 
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
+    detachDragRef.current = detach;
   }
 
   async function handleSuggestSessions() {
@@ -227,7 +282,7 @@ export function CalendarPage() {
     try {
       const run = await createRun.mutateAsync({
         event_ids: targets.map((e) => e.id),
-        horizon_start: weekStart.toISOString(),
+        horizon_start: planningHorizonStart(weekStart).toISOString(),
         horizon_end: weekEnd.toISOString(),
         slot_step_minutes: 60,
       });
@@ -249,7 +304,7 @@ export function CalendarPage() {
     try {
       const run = await createRun.mutateAsync({
         event_ids: [target.id],
-        horizon_start: weekStart.toISOString(),
+        horizon_start: planningHorizonStart(weekStart).toISOString(),
         horizon_end: weekEnd.toISOString(),
         slot_step_minutes: 60,
       });
@@ -281,11 +336,12 @@ export function CalendarPage() {
       rec: PlanningRecommendationRead;
     }> = [];
     for (const group of activeRun.results) {
-      const rec = group.recommendations[0];
-      if (!rec || !rec.id || dismissedResultIds.has(rec.id)) continue;
-      const tz = organizerTzFor(group.dance_event_id);
+      // Fall through to the next-ranked option rather than dropping the whole group
+      // when the top one is dismissed.
+      const rec = group.recommendations.find((item) => item.id && !dismissedResultIds.has(item.id));
+      if (!rec || !rec.id) continue;
       const preview = dragPreview?.resultId === rec.id ? dragPreview : null;
-      const placement = preview ?? zonedDayAndMinutes(rec.start_at, tz);
+      const placement = preview ?? gridPlacement(rec.start_at);
       if (!placement) continue;
       const durationMin = Math.round((new Date(rec.end_at).getTime() - new Date(rec.start_at).getTime()) / 60000);
       blocks.push({
@@ -304,15 +360,34 @@ export function CalendarPage() {
     }
     return blocks;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeRun, dismissedResultIds, dragPreview, events, users]);
+  }, [activeRun, dismissedResultIds, dragPreview, dayDateStrings, eventsById, usersById]);
+
+  const busyBlocks = useMemo(() => {
+    const blocks: Array<{ key: string; day: number; startMin: number; durationMin: number; label: string }> = [];
+    for (const interval of overview?.busy_intervals ?? []) {
+      const placement = gridPlacement(interval.start_at);
+      if (!placement) continue;
+      const durationMin = Math.round(
+        (new Date(interval.end_at).getTime() - new Date(interval.start_at).getTime()) / 60000,
+      );
+      blocks.push({
+        key: `busy-${interval.id}`,
+        day: placement.day,
+        startMin: placement.startMin,
+        durationMin,
+        label: usersById.get(interval.user_id)?.display_name ?? "Someone",
+      });
+    }
+    return blocks;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overview, usersById, dayDateStrings]);
 
   const confirmedBlocks = useMemo(() => {
     const blocks: Array<{ key: string; day: number; startMin: number; durationMin: number; color: string; label: string; timeLabel: string }> = [];
     for (const session of overview?.practice_sessions ?? []) {
       const event = eventsById.get(session.dance_event_id);
       if (!event || !checkedIds.has(event.id)) continue;
-      const tz = organizerTzFor(session.dance_event_id);
-      const placement = zonedDayAndMinutes(session.start_at, tz);
+      const placement = gridPlacement(session.start_at);
       if (!placement) continue;
       const durationMin = Math.round((new Date(session.end_at).getTime() - new Date(session.start_at).getTime()) / 60000);
       blocks.push({
@@ -327,12 +402,20 @@ export function CalendarPage() {
     }
     return blocks;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [overview, eventsById, checkedIds]);
+  }, [overview, eventsById, checkedIds, dayDateStrings]);
 
   const hourLabels = Array.from({ length: NUM_HOURS + 1 }, (_, i) => fmtHourLabel(DAY_START_MIN + i * 60));
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
+      {loadError && (
+        <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
+          <p className="text-sm text-destructive">
+            Could not load calendar data, so this week may be incomplete. Check that the API is
+            running, then reload.
+          </p>
+        </div>
+      )}
       <div className="flex items-start justify-between mb-5">
         <div>
           <p className="text-xs text-muted-foreground mb-1">Dashboard / Calendar</p>
@@ -447,6 +530,33 @@ export function CalendarPage() {
                     "repeating-linear-gradient(to bottom, rgba(0,0,0,0.06) 0, rgba(0,0,0,0.06) 1px, transparent 1px, transparent 72px), repeating-linear-gradient(to right, rgba(0,0,0,0.06) 0, rgba(0,0,0,0.06) 1px, transparent 1px, transparent calc(100% / 7))",
                 }}
               >
+                {/* Google-derived busy time, drawn under the practice blocks so the
+                    grid can show why a slot was not offered. */}
+                {busyBlocks.map((block) => {
+                  const top = (block.startMin - DAY_START_MIN) * PX_PER_MIN;
+                  const height = block.durationMin * PX_PER_MIN;
+                  const widthPct = 100 / 7;
+                  return (
+                    <div
+                      key={block.key}
+                      title={`${block.label} is busy`}
+                      style={{
+                        position: "absolute",
+                        top,
+                        height,
+                        left: `calc(${block.day * widthPct}% + 3px)`,
+                        width: `calc(${widthPct}% - 6px)`,
+                        borderRadius: 6,
+                        border: "1px solid rgba(0,0,0,0.12)",
+                        backgroundImage:
+                          "repeating-linear-gradient(45deg, rgba(0,0,0,0.07) 0 6px, transparent 6px 12px)",
+                        boxSizing: "border-box",
+                        pointerEvents: "none",
+                      }}
+                    />
+                  );
+                })}
+
                 {confirmedBlocks.map((block) => {
                   const top = (block.startMin - DAY_START_MIN) * PX_PER_MIN;
                   const height = block.durationMin * PX_PER_MIN;

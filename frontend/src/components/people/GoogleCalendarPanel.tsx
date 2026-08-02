@@ -31,20 +31,27 @@ export function GoogleCalendarPanel({ user }: { user: UserRead }) {
 
   const [busyIds, setBusyIds] = useState<string[]>([]);
   const [writeId, setWriteId] = useState<string | undefined>(undefined);
+  // Once the user starts editing, a background refetch must not silently revert their
+  // choices -- `connection` is a fresh object on every refetch, so re-syncing on its
+  // identity discarded unsaved edits and let Save persist the stale selection.
+  const [hasLocalEdits, setHasLocalEdits] = useState(false);
 
   useEffect(() => {
-    if (connection) {
-      setBusyIds(connection.selected_busy_calendar_ids);
-      setWriteId(connection.selected_write_calendar_id ?? undefined);
-    }
-  }, [connection]);
+    if (!connection || hasLocalEdits) return;
+    setBusyIds(connection.selected_busy_calendar_ids);
+    setWriteId(connection.selected_write_calendar_id ?? undefined);
+  }, [connection, hasLocalEdits]);
 
   function toggleBusy(id: string, checked: boolean) {
+    setHasLocalEdits(true);
     setBusyIds((prev) => (checked ? [...prev, id] : prev.filter((existing) => existing !== id)));
   }
 
   function handleSaveSelection() {
-    selectCalendars.mutate({ busy_calendar_ids: busyIds, write_calendar_id: writeId });
+    selectCalendars.mutate(
+      { busy_calendar_ids: busyIds, write_calendar_id: writeId },
+      { onSuccess: () => setHasLocalEdits(false) },
+    );
   }
 
   function handleSync() {
@@ -111,7 +118,13 @@ export function GoogleCalendarPanel({ user }: { user: UserRead }) {
                     Only takes effect when {user.display_name} organizes the event whose session gets confirmed
                     &mdash; sessions are always written to the organizer's calendar, never a participant's.
                   </p>
-                  <Select value={writeId} onValueChange={setWriteId}>
+                  <Select
+                    value={writeId}
+                    onValueChange={(value) => {
+                      setHasLocalEdits(true);
+                      setWriteId(value);
+                    }}
+                  >
                     <SelectTrigger id="write-calendar" className="w-full max-w-sm">
                       <SelectValue placeholder="Choose a calendar" />
                     </SelectTrigger>

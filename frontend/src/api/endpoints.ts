@@ -53,8 +53,13 @@ export const planningApi = {
 };
 
 export const calendarApi = {
-  overview: (start: string, end: string) =>
-    api.get<CalendarOverviewRead>(`/calendar/overview?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`),
+  // Busy intervals are private, so the backend only returns them for the users named
+  // here; omitting userIds yields practice sessions alone.
+  overview: (start: string, end: string, userIds: string[] = []) => {
+    const params = new URLSearchParams({ start, end });
+    for (const userId of userIds) params.append("user_ids", userId);
+    return api.get<CalendarOverviewRead>(`/calendar/overview?${params.toString()}`);
+  },
 };
 
 export const practicesApi = {

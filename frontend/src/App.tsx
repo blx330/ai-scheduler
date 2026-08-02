@@ -5,8 +5,10 @@ import { MembersPage } from "@/pages/MembersPage";
 import { MemberDetailPage } from "@/pages/MemberDetailPage";
 import { EventsPage } from "@/pages/EventsPage";
 import { CalendarPage } from "@/pages/CalendarPage";
+import { useOAuthRedirect } from "@/hooks/use-oauth-redirect";
 
 function App() {
+  useOAuthRedirect();
   return (
     <AppShell>
       <Routes>

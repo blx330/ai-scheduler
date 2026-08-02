@@ -14,6 +14,9 @@ from app.infrastructure.db.types import GUID
 
 class CalendarConnection(Base):
     __tablename__ = "calendar_connections"
+    __table_args__ = (
+        Index("ix_calendar_connection_user_provider", "user_id", "provider"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
@@ -26,6 +29,12 @@ class CalendarConnection(Base):
     account_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     selected_busy_calendar_ids_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     selected_write_calendar_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Window most recently covered by a successful busy sync. Without this, "has a
+    # token" was treated as "we know this person's schedule", so a user who connected
+    # Google but never synced was planned as free 24/7.
+    busy_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    busy_synced_start_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    busy_synced_end_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 

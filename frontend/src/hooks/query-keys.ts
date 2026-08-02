@@ -5,7 +5,10 @@ export const queryKeys = {
   events: ["events"] as const,
   event: (id: string) => ["events", id] as const,
   eventSessions: (id: string) => ["events", id, "sessions"] as const,
-  calendarOverview: (start: string, end: string) => ["calendar-overview", start, end] as const,
+  // userIds is part of the key: it changes the response, so leaving it out would serve
+  // one member set's data for another's
+  calendarOverview: (start: string, end: string, userIds: string[] = []) =>
+    ["calendar-overview", start, end, [...userIds].sort().join(",")] as const,
   googleConnection: (userId: string) => ["google-connection", userId] as const,
   googleCalendars: (userId: string) => ["google-calendars", userId] as const,
 };

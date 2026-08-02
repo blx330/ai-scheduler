@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+MIN_SLOT_STEP_MINUTES = 5
+MAX_SLOT_STEP_MINUTES = 24 * 60
+MAX_HORIZON_DAYS = 180
 
 
 def _validate_timezone_aware(value: datetime) -> datetime:
@@ -30,7 +34,21 @@ class PlanningRunCreate(BaseModel):
     def validate_slot_step(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("Slot step minutes must be positive")
+        if value < MIN_SLOT_STEP_MINUTES:
+            raise ValueError(f"Slot step minutes must be at least {MIN_SLOT_STEP_MINUTES}")
+        if value > MAX_SLOT_STEP_MINUTES:
+            raise ValueError(f"Slot step minutes must be at most {MAX_SLOT_STEP_MINUTES}")
         return value
+
+    @model_validator(mode="after")
+    def validate_horizon_span(self) -> "PlanningRunCreate":
+        # Planning runs inline in the request, and candidate count scales with
+        # (horizon span / slot step). Bound both so a single call cannot pin a worker.
+        if self.horizon_end <= self.horizon_start:
+            raise ValueError("Planning horizon end must be after start")
+        if self.horizon_end - self.horizon_start > timedelta(days=MAX_HORIZON_DAYS):
+            raise ValueError(f"Planning horizon must span at most {MAX_HORIZON_DAYS} days")
+        return self
 
     @field_validator("event_ids")
     @classmethod
@@ -184,6 +202,9 @@ class PracticeSessionRead(BaseModel):
 class PlanningRunConfirmResponse(BaseModel):
     planning_run_id: UUID
     confirmed_sessions: list[PracticeSessionRead] = Field(default_factory=list)
+    # Sessions are confirmed even if pushing them to Google Calendar fails, so that
+    # failure has to be reported rather than swallowed -- mirrors the unschedule path.
+    warnings: list[str] = Field(default_factory=list)
 
 
 class CalendarBusyIntervalRead(BaseModel):

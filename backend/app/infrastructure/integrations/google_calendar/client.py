@@ -10,6 +10,8 @@ from urllib.parse import quote, urlencode
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
+# Backstop against an unbounded pagination loop; 250 per page covers any realistic account.
+MAX_CALENDAR_LIST_PAGES = 20
 GOOGLE_FREEBUSY_URL = "https://www.googleapis.com/calendar/v3/freeBusy"
 GOOGLE_EVENTS_URL_TEMPLATE = "https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events"
 GOOGLE_SCOPE_CALENDAR = "https://www.googleapis.com/auth/calendar"
@@ -153,24 +155,40 @@ class GoogleCalendarClient:
         return self._build_tokens(payload)
 
     def list_calendars(self, access_token: str) -> list[GoogleCalendarSummary]:
-        response = self._requests().get(
-            GOOGLE_CALENDAR_LIST_URL,
-            headers=self._auth_headers(access_token),
-            params={"minAccessRole": "reader"},
-            timeout=30,
-        )
-        self._raise_for_google_error(response, "Google Calendar list")
-        payload = response.json()
-        return [
-            GoogleCalendarSummary(
-                id=item["id"],
-                summary=item.get("summaryOverride") or item.get("summary") or item["id"],
-                primary=bool(item.get("primary")),
-                access_role=item.get("accessRole", ""),
-                time_zone=item.get("timeZone"),
+        # calendarList.list pages at 100 by default, and the result is used to validate
+        # the user's calendar selection -- so without following nextPageToken, anything
+        # past page one is unselectable and reported as "not available".
+        calendars: list[GoogleCalendarSummary] = []
+        params: dict[str, object] = {"minAccessRole": "reader", "maxResults": 250}
+        for _ in range(MAX_CALENDAR_LIST_PAGES):
+            response = self._requests().get(
+                GOOGLE_CALENDAR_LIST_URL,
+                headers=self._auth_headers(access_token),
+                params=params,
+                timeout=30,
             )
-            for item in payload.get("items", [])
-        ]
+            self._raise_for_google_error(response, "Google Calendar list")
+            payload = response.json()
+            calendars.extend(
+                GoogleCalendarSummary(
+                    id=item["id"],
+                    summary=item.get("summaryOverride") or item.get("summary") or item["id"],
+                    primary=bool(item.get("primary")),
+                    access_role=item.get("accessRole", ""),
+                    time_zone=item.get("timeZone"),
+                )
+                for item in payload.get("items", [])
+            )
+            next_page_token = payload.get("nextPageToken")
+            if not next_page_token:
+                break
+            params = {**params, "pageToken": next_page_token}
+        else:
+            logger.warning(
+                "Google calendar list stopped after %s pages; some calendars may be missing.",
+                MAX_CALENDAR_LIST_PAGES,
+            )
+        return calendars
 
     def get_free_busy(
         self,
@@ -192,7 +210,16 @@ class GoogleCalendarClient:
         self._raise_for_google_error(response, "Google Calendar free/busy lookup")
         payload = response.json()
         results: list[GoogleBusyInterval] = []
+        failed: list[str] = []
         for calendar_id, details in payload.get("calendars", {}).items():
+            # Google reports per-calendar failures here with HTTP 200 overall and an
+            # empty `busy` list. Ignoring them made an unreadable calendar look totally
+            # free, and the sync then wiped that user's real busy time.
+            errors = details.get("errors") or []
+            if errors:
+                reasons = ", ".join(str(item.get("reason", "unknown")) for item in errors)
+                failed.append(f"{calendar_id} ({reasons})")
+                continue
             for interval in details.get("busy", []):
                 results.append(
                     GoogleBusyInterval(
@@ -201,6 +228,12 @@ class GoogleCalendarClient:
                         end_at=_parse_google_datetime(interval["end"]),
                     )
                 )
+        if failed:
+            raise RuntimeError(
+                "Google Calendar could not read busy time for: "
+                + "; ".join(failed)
+                + ". Reconnect Google or update the selected calendars."
+            )
         return results
 
     def create_event(
