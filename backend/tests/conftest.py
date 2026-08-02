@@ -24,7 +24,10 @@ def session_factory(tmp_path: Path):
 
 @pytest.fixture()
 def app(session_factory):
-    settings = Settings(database_url="sqlite:///ignored.db")
+    # Auto-sync is off in tests so behavior doesn't depend on a developer's local
+    # .env (Settings loads env_file on every construction, and this app documents
+    # live Google OAuth setup, so a real GOOGLE_CLIENT_ID being present is plausible).
+    settings = Settings(database_url="sqlite:///ignored.db", auto_sync_enabled=False)
     return create_app(settings=settings, session_factory=session_factory)
 
 

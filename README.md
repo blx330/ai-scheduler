@@ -14,10 +14,12 @@ The API is served by FastAPI (`backend/`). The UI is a React SPA (`frontend/`) t
 Current flow:
 1. Create users
 2. Add manual availability (explicit free intervals)
-3. Optionally connect Google Calendar and sync busy intervals
+3. Optionally connect Google Calendar — once connected, busy intervals sync automatically on a timer (also syncable on demand)
 4. Create events with required participants
 5. Run planning (`/api/v1/planning-runs`) to get top recommendations
 6. Confirm selected results and optionally create Google Calendar events
+
+The calendar page shows a week grid with per-dance session blocks (drag to reschedule) and a Members panel where each member gets a checkbox and a unique color — toggle a member to show or hide their Google-derived busy time on the grid, labeled with their name.
 
 Scheduling behavior in this codebase:
 - required attendees are a hard constraint for primary recommendations; if not enough fully-feasible options exist, fallback suggestions may include missing required attendees
@@ -60,7 +62,7 @@ Scheduling behavior in this codebase:
 ### Frontend app
 - `frontend/src/api/` - typed fetch client + TypeScript types matching the backend Pydantic schemas
 - `frontend/src/hooks/` - TanStack Query hooks per resource (users, availability, events, planning, calendar, google-calendar)
-- `frontend/src/pages/` + `frontend/src/components/` - member/availability/preference management, event scheduling, planning + confirmation, Google Calendar sync, weekly calendar overview
+- `frontend/src/pages/` + `frontend/src/components/` - member/availability/preference management, event scheduling, planning + confirmation, Google Calendar sync, weekly calendar overview with a per-member visibility/color panel and drag-to-reschedule
 - `frontend/src/components/ui/` - hand-built shadcn/ui primitives (Radix + class-variance-authority + tailwind-merge)
 - See `frontend/README.md` for frontend-specific dev notes.
 
@@ -103,6 +105,9 @@ Variables currently read by backend settings (`backend/app/infrastructure/config
 - `GOOGLE_CLIENT_ID` (needed for Google OAuth flow)
 - `GOOGLE_CLIENT_SECRET` (needed for Google OAuth flow)
 - `GOOGLE_REDIRECT_URI` (needed for Google OAuth flow)
+- `AUTO_SYNC_ENABLED` (default `true`) - background sweep that refreshes every connected member's Google busy time on a timer, in addition to the manual "Sync busy time" button
+- `AUTO_SYNC_INTERVAL_MINUTES` (default `15`) - how often the sweep runs
+- `AUTO_SYNC_HORIZON_DAYS` (default `30`) - how far ahead each sweep syncs, matching the manual sync window
 
 Notes:
 - Get a Gemini API key from Google AI Studio (https://aistudio.google.com/apikey) and set `GEMINI_API_KEY` in `.env`.
@@ -234,7 +239,7 @@ There is no frontend unit/component test suite yet (see limitations below).
 
 - no auth/permissions system yet
 - no recurring availability support
-- no background jobs (sync/planning work happens inline)
+- planning runs are still computed inline, on demand (only Google busy-time sync runs as a background job)
 - Google integration is functional for demo/dev, but not hardened as production OAuth infra
-- the calendar overview in the frontend is a weekly agenda grid, not a full hour-by-hour drag calendar
+- the automatic sync sweep assumes a single API process/replica; running multiple API instances would need a lock or an external scheduler to avoid duplicate sweeps
 - no frontend automated test suite (build + lint only)
