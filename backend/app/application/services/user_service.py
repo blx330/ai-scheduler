@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 import logging
 from typing import Optional, Union
 
@@ -7,11 +8,17 @@ from sqlalchemy.orm import Session
 
 from app.infrastructure.db.models import DanceEvent, DanceEventParticipant
 from app.api.schemas.users import UserCreate, UserUpdate
+from app.domain.common.datetime_utils import ensure_utc
 from app.domain.preferences.models import CachedPracticePreference
-from app.infrastructure.db.models import CalendarConnection, User
+from app.infrastructure.db.models import CalendarConnection, ManualAvailabilityInterval, User
 from app.infrastructure.integrations.llm.profile_preference_parser import UserProfilePreferenceParser
 
 logger = logging.getLogger(__name__)
+
+# How long a just-created, still-empty account stays re-claimable by a repeat signup
+# with the same email. Long enough to cover a form retry, short enough that an
+# established account is never overwritable.
+INCOMPLETE_REGISTRATION_WINDOW = timedelta(minutes=15)
 
 
 class UserService:
@@ -32,7 +39,9 @@ class UserService:
         user = User(
             display_name=payload.display_name,
             timezone=payload.timezone,
-            email=payload.email,
+            # store normalized: the lookup strips and lower-cases, so storing raw let
+            # " Alice@x.com" and "alice@x.com" coexist while matching each other
+            email=_normalize_email(payload.email),
             preferred_practice_time=payload.preferred_practice_time.value if payload.preferred_practice_time else None,
         )
         _apply_user_practice_preferences(user, payload, preference_parser)
@@ -52,22 +61,44 @@ class UserService:
         return self.db.get(User, user_id)
 
     def _find_user_by_email(self, email: Optional[str]) -> Optional[User]:
-        if not email:
-            return None
-        normalized = email.strip()
+        normalized = _normalize_email(email)
         if not normalized:
             return None
-        return self.db.scalars(select(User).where(func.lower(User.email) == normalized.lower())).first()
+        return self.db.scalars(select(User).where(func.lower(User.email) == normalized)).first()
 
     def _is_registration_incomplete(self, user: User) -> bool:
+        """May a repeat signup with this email re-claim the existing account?
+
+        Only for a brand-new account that holds nothing. Treating every user without a
+        Google connection as "incomplete" -- the normal path for this app -- meant
+        anyone could overwrite any account's name, timezone and preferences, and learn
+        its id, just by posting a known email address.
+        """
+        if ensure_utc(user.created_at) < datetime.now(timezone.utc) - INCOMPLETE_REGISTRATION_WINDOW:
+            return False
+
         connections = self.db.scalars(
             select(CalendarConnection)
             .where(CalendarConnection.user_id == user.id)
             .where(CalendarConnection.provider == "google")
         ).all()
-        if not connections:
-            return True
-        return not any(connection.refresh_token or connection.access_token for connection in connections)
+        if any(connection.refresh_token or connection.access_token for connection in connections):
+            return False
+
+        has_data = self.db.scalars(
+            select(ManualAvailabilityInterval.id).where(ManualAvailabilityInterval.user_id == user.id).limit(1)
+        ).first()
+        if has_data is not None:
+            return False
+        organizes = self.db.scalars(
+            select(DanceEvent.id).where(DanceEvent.organizer_user_id == user.id).limit(1)
+        ).first()
+        if organizes is not None:
+            return False
+        participates = self.db.scalars(
+            select(DanceEventParticipant.id).where(DanceEventParticipant.user_id == user.id).limit(1)
+        ).first()
+        return participates is None
 
     def _reset_incomplete_user(
         self,
@@ -77,7 +108,7 @@ class UserService:
     ) -> None:
         user.display_name = payload.display_name
         user.timezone = payload.timezone
-        user.email = payload.email
+        user.email = _normalize_email(payload.email)
         user.preferred_practice_time = payload.preferred_practice_time.value if payload.preferred_practice_time else None
         user.preferred_practice_time_raw = None
         user.preferred_practice_time_parsed = None
@@ -126,6 +157,12 @@ class UserService:
         return True
 
 
+def _normalize_email(email: Optional[str]) -> Optional[str]:
+    if not email:
+        return None
+    return email.strip().lower() or None
+
+
 def _apply_user_practice_preferences(
     user: User,
     payload: Union[UserCreate, UserUpdate],
@@ -141,10 +178,15 @@ def _apply_user_practice_preferences(
 
     raw_text = (payload.preferred_practice_time_raw or "").strip()
     user.preferred_practice_time_raw = raw_text or None
-    user.preferred_practice_time = None
     if not raw_text:
+        # Clearing the free-text preference must not also clear a preset set in this
+        # same request -- that made saving any preset a silent no-op, because the UI
+        # sends both fields and the preset branch above runs first.
         user.preferred_practice_time_parsed = None
         return
+
+    # Free-text supersedes a preset only when text was actually supplied.
+    user.preferred_practice_time = None
 
     if preference_parser is None:
         user.preferred_practice_time_parsed = None

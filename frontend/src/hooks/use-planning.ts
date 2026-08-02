@@ -17,10 +17,13 @@ export function useConfirmPlanningRun() {
   return useMutation({
     mutationFn: ({ runId, body }: { runId: string; body: PlanningRunConfirmRequest }) =>
       planningApi.confirm(runId, body),
-    onSuccess: () => {
+    onSuccess: (data) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.events });
       void queryClient.invalidateQueries({ queryKey: ["calendar-overview"] });
       toast.success("Sessions confirmed");
+      // The session is saved even when the Google Calendar push fails; saying only
+      // "confirmed" left the user believing the event had reached their calendar.
+      for (const warning of data.warnings ?? []) toast.warning(warning);
     },
     onError: (error) => toast.error(errorMessage(error)),
   });

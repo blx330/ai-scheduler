@@ -81,4 +81,19 @@ def create_app(
     return app
 
 
-app = create_app()
+_app: Optional[FastAPI] = None
+
+
+def __getattr__(name: str) -> FastAPI:
+    """Build the ASGI app on first attribute access rather than at import time.
+
+    `uvicorn app.main:app` still resolves, but importing this module (as the test
+    suite does, to reach `create_app`) no longer constructs a database engine and
+    therefore no longer requires a reachable DATABASE_URL.
+    """
+    if name != "app":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    global _app
+    if _app is None:
+        _app = create_app()
+    return _app

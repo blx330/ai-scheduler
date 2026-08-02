@@ -90,10 +90,12 @@ export interface DanceEventCreate {
 
 export interface DanceEventUpdate {
   name?: string;
-  description?: string;
+  // nullable: the backend distinguishes "field absent" (leave alone) from an explicit
+  // null (clear it), so these must be able to carry null to be clearable at all
+  description?: string | null;
   organizer_user_id?: string;
   duration_minutes?: number;
-  earliest_start_date?: string;
+  earliest_start_date?: string | null;
   min_days_apart?: number;
   latest_schedule_at?: string;
   required_session_count?: number;
@@ -199,6 +201,8 @@ export interface PracticeSessionRead {
 export interface PlanningRunConfirmResponse {
   planning_run_id: string;
   confirmed_sessions: PracticeSessionRead[];
+  /** Non-fatal problems, e.g. the session was confirmed but not pushed to Google Calendar. */
+  warnings: string[];
 }
 
 export interface CalendarBusyInterval {

@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.db.base import Base
@@ -35,7 +35,7 @@ class DanceEvent(Base):
     organizer = relationship("User", back_populates="organized_dance_events")
     participants = relationship("DanceEventParticipant", back_populates="dance_event", cascade="all, delete-orphan")
     practice_sessions = relationship("PracticeSession", back_populates="dance_event", cascade="all, delete-orphan")
-    planning_results = relationship("PlanningRunResult", back_populates="dance_event")
+    planning_results = relationship("PlanningRunResult", back_populates="dance_event", passive_deletes=True)
 
 
 class DanceEventParticipant(Base):
@@ -43,6 +43,9 @@ class DanceEventParticipant(Base):
     __table_args__ = (
         UniqueConstraint("dance_event_id", "user_id", name="uq_dance_event_participant"),
         Index("ix_dance_event_participant_role", "dance_event_id", "role"),
+        # the unique constraint above leads with dance_event_id, so it cannot serve
+        # the by-user lookups done when deleting a member
+        Index("ix_dance_event_participant_user", "user_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
@@ -121,6 +124,18 @@ class PracticeSession(Base):
     __table_args__ = (
         Index("ix_practice_session_event_session", "dance_event_id", "session_index"),
         Index("ix_practice_session_time", "start_at", "end_at"),
+        # Confirming is a check-then-insert, so only the database can stop two
+        # concurrent confirms from both booking the same session. Partial, because
+        # unscheduled/cancelled rows for the same session are expected to accumulate.
+        Index(
+            "uq_practice_session_confirmed",
+            "dance_event_id",
+            "session_index",
+            unique=True,
+            postgresql_where=text("status = 'confirmed'"),
+            sqlite_where=text("status = 'confirmed'"),
+        ),
+        Index("ix_practice_session_room", "room_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)

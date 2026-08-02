@@ -33,6 +33,4 @@ backend/app/static/
 .vscode/
 
 # snapshots
-PROJECT_SNAPSHOT_*.md.env
-.env
-.env
+PROJECT_SNAPSHOT_*.md

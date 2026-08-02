@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Union
+from typing import Optional, Union
 from uuid import UUID
 
 from app.domain.availability.models import Interval

@@ -1,4 +1,4 @@
-import { fromZonedTime, toZonedTime, formatInTimeZone } from "date-fns-tz";
+import { fromZonedTime, formatInTimeZone } from "date-fns-tz";
 
 export function localPartsToIso(dateStr: string, timeStr: string, timeZone: string): string {
   const naive = `${dateStr}T${timeStr}:00`;
@@ -6,10 +6,13 @@ export function localPartsToIso(dateStr: string, timeStr: string, timeZone: stri
 }
 
 export function isoToZonedParts(iso: string, timeZone: string): { date: string; time: string } {
-  const zoned = toZonedTime(iso, timeZone);
+  // formatInTimeZone already converts the instant into `timeZone`. Passing it a value
+  // that had been through toZonedTime first applied the offset twice, shifting the
+  // result by (timeZone offset - browser offset) -- and since these parts are written
+  // straight back on save, every edit moved the stored timestamp.
   return {
-    date: formatInTimeZone(zoned, timeZone, "yyyy-MM-dd"),
-    time: formatInTimeZone(zoned, timeZone, "HH:mm"),
+    date: formatInTimeZone(iso, timeZone, "yyyy-MM-dd"),
+    time: formatInTimeZone(iso, timeZone, "HH:mm"),
   };
 }
 

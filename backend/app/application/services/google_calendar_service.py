@@ -210,10 +210,29 @@ class GoogleCalendarService:
                 CalendarBusyInterval(
                     user_id=user_id,
                     calendar_connection_id=connection.id,
-                    start_at=interval.start_at,
-                    end_at=interval.end_at,
+                    # Google returns these in the calendar's own offset; every other
+                    # write path normalizes first, and backends that drop the offset
+                    # would otherwise store the wall-clock time as if it were UTC.
+                    start_at=ensure_utc(interval.start_at),
+                    end_at=ensure_utc(interval.end_at),
                 )
             )
+
+        # Record the window we actually have data for, extending any previously
+        # synced window it touches, so planning can tell "free" from "unknown".
+        connection.busy_synced_at = datetime.now(timezone.utc)
+        if (
+            connection.busy_synced_start_at is not None
+            and connection.busy_synced_end_at is not None
+            and ensure_utc(connection.busy_synced_start_at) <= end_at
+            and ensure_utc(connection.busy_synced_end_at) >= start_at
+        ):
+            connection.busy_synced_start_at = min(start_at, ensure_utc(connection.busy_synced_start_at))
+            connection.busy_synced_end_at = max(end_at, ensure_utc(connection.busy_synced_end_at))
+        else:
+            connection.busy_synced_start_at = start_at
+            connection.busy_synced_end_at = end_at
+        self.db.add(connection)
 
         self.db.commit()
         logger.info(

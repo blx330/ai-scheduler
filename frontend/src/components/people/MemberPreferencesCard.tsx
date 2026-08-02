@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,13 +6,27 @@ import { PreferenceEditor, PreferenceSummary, type PreferenceValue } from "./Pre
 import { useUpdateUser } from "@/hooks/use-users";
 import type { UserRead } from "@/api/types";
 
-export function MemberPreferencesCard({ user }: { user: UserRead }) {
-  const updateUser = useUpdateUser();
-  const [preference, setPreference] = useState<PreferenceValue>({
+function preferenceFromUser(user: UserRead): PreferenceValue {
+  return {
     mode: user.preferred_practice_time_raw ? "freeform" : "preset",
     preset: user.preferred_practice_time ?? undefined,
     raw: user.preferred_practice_time_raw ?? "",
-  });
+  };
+}
+
+export function MemberPreferencesCard({ user }: { user: UserRead }) {
+  const updateUser = useUpdateUser();
+  const [preference, setPreference] = useState<PreferenceValue>(() => preferenceFromUser(user));
+
+  // Re-sync from the server after a save. Without this the card kept showing the
+  // edited value regardless of what was actually persisted, hiding both failed saves
+  // and any rewriting the preference parser did.
+  // Only the persisted preference fields should reset local edits -- depending on the
+  // whole `user` object would reset on every refetch, since it is a new identity each time.
+  useEffect(() => {
+    setPreference(preferenceFromUser(user));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user.id, user.preferred_practice_time, user.preferred_practice_time_raw]);
 
   function handleSave() {
     updateUser.mutate({

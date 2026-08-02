@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { CalendarX, Plus } from "lucide-react";
 
@@ -70,7 +70,7 @@ function emptyForm(defaultOrganizerId?: string): EventFormState {
 export function EventsPage() {
   const { eventId } = useParams<{ eventId: string }>();
   const navigate = useNavigate();
-  const { data: events } = useEvents();
+  const { data: events, isLoading: eventsLoading, isError: eventsError } = useEvents();
   const { data: users } = useUsers();
   const createEvent = useCreateEvent();
   const updateEvent = useUpdateEvent();
@@ -83,11 +83,20 @@ export function EventsPage() {
   const selectedEvent = events?.find((e) => e.id === selectedId);
   const { data: sessions } = useEventSessions(isCreating ? undefined : selectedEvent?.id);
 
+  // Id of an event we just created. The list invalidation is async, so without this
+  // the effect below sees a stale list that lacks the new id and "corrects" the
+  // selection to some other event -- silently pointing the form at the wrong dance.
+  const justCreatedId = useRef<string | null>(null);
+
   useEffect(() => {
     if (!events || events.length === 0) return;
-    if (!selectedId || (selectedId !== NEW_EVENT_ID && !events.some((e) => e.id === selectedId))) {
-      setSelectedId(events[0].id);
+    if (selectedId === NEW_EVENT_ID) return;
+    if (selectedId && events.some((e) => e.id === selectedId)) {
+      justCreatedId.current = null;
+      return;
     }
+    if (selectedId && selectedId === justCreatedId.current) return; // refetch hasn't landed
+    setSelectedId(events[0].id);
   }, [events, selectedId]);
 
   useEffect(() => {
@@ -118,7 +127,21 @@ export function EventsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedEvent?.id, isCreating]);
 
-  const canSave = Boolean(form.name.trim() && form.organizerId && form.deadlineDate && hasRequiredParticipant(form.participants));
+  // Number("") is 0 and a partially-typed value is NaN, neither of which the backend
+  // accepts -- so gate on them here instead of surfacing a cryptic 400 after Save.
+  const positiveNumbers = [form.durationMinutes, form.requiredSessionCount].every(
+    (value) => Number.isFinite(value) && value > 0,
+  );
+  const minDaysApartValid = Number.isFinite(form.minDaysApart) && form.minDaysApart >= 0;
+  const canSave = Boolean(
+    form.name.trim() &&
+      form.organizerId &&
+      form.deadlineDate &&
+      form.deadlineTime &&
+      positiveNumbers &&
+      minDaysApartValid &&
+      hasRequiredParticipant(form.participants),
+  );
 
   function buildParticipants(): DanceEventParticipant[] {
     return Object.entries(form.participants)
@@ -145,7 +168,10 @@ export function EventsPage() {
           participants: buildParticipants(),
         },
         {
-          onSuccess: (created) => setSelectedId(created.id),
+          onSuccess: (created) => {
+            justCreatedId.current = created.id;
+            setSelectedId(created.id);
+          },
         },
       );
       return;
@@ -156,10 +182,12 @@ export function EventsPage() {
       id: selectedEvent.id,
       body: {
         name: form.name.trim(),
-        description: form.description.trim() || undefined,
+        // null, not undefined: JSON.stringify drops undefined keys, so clearing these
+        // never reached the backend and the old value silently stuck around
+        description: form.description.trim() || null,
         organizer_user_id: form.organizerId,
         duration_minutes: form.durationMinutes,
-        earliest_start_date: form.earliestStartDate || undefined,
+        earliest_start_date: form.earliestStartDate || null,
         min_days_apart: form.minDaysApart,
         latest_schedule_at,
         required_session_count: form.requiredSessionCount,
@@ -177,6 +205,13 @@ export function EventsPage() {
         <p className="text-xs text-muted-foreground mb-1">Dashboard / Events</p>
         <h2 className="text-2xl font-bold tracking-tight">Events</h2>
       </div>
+
+      {eventsLoading && <p className="text-sm text-muted-foreground">Loading dances...</p>}
+      {eventsError && (
+        <p className="text-sm text-destructive">
+          Failed to load dances. Check that the API is running, then reload.
+        </p>
+      )}
 
       <div className="flex flex-wrap gap-2">
         {(events ?? []).map((eventItem) => (
