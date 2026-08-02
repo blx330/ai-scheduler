@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     google_client_id: Optional[str] = Field(default=None, validation_alias="GOOGLE_CLIENT_ID")
     google_client_secret: Optional[str] = Field(default=None, validation_alias="GOOGLE_CLIENT_SECRET")
     google_redirect_uri: Optional[str] = Field(default=None, validation_alias="GOOGLE_REDIRECT_URI")
+    auto_sync_enabled: bool = True
+    auto_sync_interval_minutes: int = 15
+    auto_sync_horizon_days: int = 30
 
     @field_validator("database_url", mode="before")
     @classmethod

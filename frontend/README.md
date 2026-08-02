@@ -23,6 +23,5 @@ npm run lint    # oxlint
 
 ## Known simplifications
 
-- The calendar overview is a 7-card weekly agenda grid, not an hour-by-hour drag calendar.
 - Planning-run results live in local component state; re-running planning replaces them rather than being cached per run ID.
 - No frontend automated test suite yet — `npm run build` (type-checking) and `npm run lint` are the current quality gates.

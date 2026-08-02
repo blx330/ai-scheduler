@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +18,7 @@ from app.infrastructure.config import Settings
 from app.infrastructure.db.session import build_session_factory
 from app.infrastructure.integrations.google_calendar.client import build_google_calendar_client
 from app.infrastructure.integrations.llm.profile_preference_parser import build_user_profile_preference_parser
+from app.infrastructure.scheduling.auto_sync import auto_sync_loop
 
 
 def create_app(
@@ -24,7 +28,28 @@ def create_app(
     google_calendar_client=None,
 ) -> FastAPI:
     app_settings = settings or Settings()
-    app = FastAPI(title=app_settings.app_name)
+    session_factory = session_factory or build_session_factory(app_settings.database_url)
+    google_calendar_client = google_calendar_client or build_google_calendar_client(
+        client_id=app_settings.google_client_id,
+        client_secret=app_settings.google_client_secret,
+        redirect_uri=app_settings.google_redirect_uri,
+    )
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        sync_task: Optional[asyncio.Task] = None
+        if app_settings.auto_sync_enabled:
+            sync_task = asyncio.create_task(auto_sync_loop(session_factory, app_settings, google_calendar_client))
+        _app.state.auto_sync_task = sync_task
+        try:
+            yield
+        finally:
+            if sync_task is not None:
+                sync_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await sync_task
+
+    app = FastAPI(title=app_settings.app_name, lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[app_settings.frontend_url],
@@ -33,15 +58,11 @@ def create_app(
         allow_headers=["*"],
     )
     app.state.settings = app_settings
-    app.state.session_factory = session_factory or build_session_factory(app_settings.database_url)
+    app.state.session_factory = session_factory
     app.state.user_profile_preference_parser = user_profile_preference_parser or build_user_profile_preference_parser(
         api_key=app_settings.gemini_api_key,
     )
-    app.state.google_calendar_client = google_calendar_client or build_google_calendar_client(
-        client_id=app_settings.google_client_id,
-        client_secret=app_settings.google_client_secret,
-        redirect_uri=app_settings.google_redirect_uri,
-    )
+    app.state.google_calendar_client = google_calendar_client
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:

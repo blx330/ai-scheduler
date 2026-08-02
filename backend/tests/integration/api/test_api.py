@@ -1,7 +1,10 @@
+import asyncio
 from datetime import datetime, timezone
 from datetime import timedelta
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
+
+from fastapi.testclient import TestClient
 
 from app.infrastructure.config import Settings
 from app.infrastructure.db.models import CalendarBusyInterval, CalendarConnection
@@ -255,7 +258,7 @@ def test_create_user_rejects_duplicate_email_when_registration_completed(client,
 
 def test_app_bootstraps_gemini_profile_parser_from_gemini_env(monkeypatch, session_factory) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-demo-key")
-    settings = Settings(database_url="sqlite:///ignored.db")
+    settings = Settings(database_url="sqlite:///ignored.db", auto_sync_enabled=False)
 
     app = create_app(settings=settings, session_factory=session_factory)
 
@@ -263,6 +266,33 @@ def test_app_bootstraps_gemini_profile_parser_from_gemini_env(monkeypatch, sessi
     assert isinstance(parser, GeminiUserProfilePreferenceParser)
     assert settings.gemini_api_key == "gemini-demo-key"
     assert parser.api_key == "gemini-demo-key"
+
+
+def test_auto_sync_task_not_created_when_disabled(session_factory) -> None:
+    settings = Settings(database_url="sqlite:///ignored.db", auto_sync_enabled=False)
+    app = create_app(settings=settings, session_factory=session_factory)
+
+    with TestClient(app):
+        assert app.state.auto_sync_task is None
+
+
+def test_auto_sync_task_runs_when_enabled(monkeypatch, session_factory) -> None:
+    calls = []
+
+    async def fake_auto_sync_loop(loop_session_factory, loop_settings, loop_client) -> None:
+        calls.append((loop_session_factory, loop_settings, loop_client))
+        await asyncio.Event().wait()  # block until the lifespan cancels it, like the real loop
+
+    monkeypatch.setattr("app.main.auto_sync_loop", fake_auto_sync_loop)
+
+    settings = Settings(database_url="sqlite:///ignored.db", auto_sync_enabled=True)
+    app = create_app(settings=settings, session_factory=session_factory)
+
+    with TestClient(app):
+        assert app.state.auto_sync_task is not None
+
+    assert len(calls) == 1
+    assert calls[0] == (session_factory, settings, app.state.google_calendar_client)
 
 
 def test_connected_google_users_can_plan_without_manual_availability(client, app) -> None:

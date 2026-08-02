@@ -15,7 +15,7 @@ import { useConfirmPlanningRun, useCreatePlanningRun, useReschedulePractice } fr
 import { useUsers } from "@/hooks/use-users";
 import { errorMessage } from "@/hooks/query-keys";
 import { eventColor } from "@/lib/eventColor";
-import { userColor } from "@/lib/userColor";
+import { buildMemberColorMap } from "@/lib/userColor";
 import { localPartsToIso } from "@/lib/datetime";
 import type {
   PlanningRecommendationRead,
@@ -101,6 +101,7 @@ export function CalendarPage() {
 
   const [anchor, setAnchor] = useState(() => new Date());
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [visibleMemberIds, setVisibleMemberIds] = useState<Set<string>>(new Set());
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [activeRun, setActiveRun] = useState<PlanningRunRead | null>(null);
   const [dismissedResultIds, setDismissedResultIds] = useState<Set<string>>(new Set());
@@ -139,33 +140,49 @@ export function CalendarPage() {
     });
   }, [events]);
 
+  // Same "don't silently re-check what was deliberately hidden" problem as
+  // autoCheckedIds above, but for members in the new visibility panel.
+  const autoVisibleMemberIds = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!users) return;
+    const liveIds = new Set(users.map((u) => u.id));
+    const newIds = users.filter((u) => !autoVisibleMemberIds.current.has(u.id)).map((u) => u.id);
+    for (const id of newIds) autoVisibleMemberIds.current.add(id);
+    for (const id of [...autoVisibleMemberIds.current]) {
+      if (!liveIds.has(id)) autoVisibleMemberIds.current.delete(id);
+    }
+
+    setVisibleMemberIds((prev) => {
+      const next = new Set<string>();
+      for (const id of prev) if (liveIds.has(id)) next.add(id); // drop deleted members
+      for (const id of newIds) next.add(id); // default new members to visible
+      const unchanged = next.size === prev.size && [...next].every((id) => prev.has(id));
+      return unchanged ? prev : next;
+    });
+  }, [users]);
+
   const weekStart = useMemo(() => startOfWeek(anchor, { weekStartsOn: 1 }), [anchor]);
   const weekEnd = useMemo(() => endOfWeek(anchor, { weekStartsOn: 1 }), [anchor]);
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
   const dayDateStrings = useMemo(() => days.map((d) => format(d, "yyyy-MM-dd")), [days]);
 
-  // Busy time for everyone taking part in a checked dance, so the grid can explain
-  // why a slot was not offered.
-  const relevantUserIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const event of events ?? []) {
-      if (!checkedIds.has(event.id)) continue;
-      ids.add(event.organizer_user_id);
-      for (const participant of event.participants) ids.add(participant.user_id);
-    }
-    return [...ids].sort();
-  }, [events, checkedIds]);
+  // Busy time only for members toggled visible in the Members panel -- that panel
+  // is the sole control over whose calendar is fetched/shown, independent of which
+  // dances are checked.
+  const visibleMemberIdList = useMemo(() => [...visibleMemberIds].sort(), [visibleMemberIds]);
 
   const { data: overview, isError: overviewError } = useCalendarOverview(
     weekStart.toISOString(),
     weekEnd.toISOString(),
-    relevantUserIds,
+    visibleMemberIdList,
   );
   // An empty grid is indistinguishable from a backend outage without this.
   const loadError = eventsError || overviewError;
 
   const eventsById = useMemo(() => new Map((events ?? []).map((e) => [e.id, e])), [events]);
   const usersById = useMemo(() => new Map((users ?? []).map((u) => [u.id, u])), [users]);
+  const memberColorMap = useMemo(() => buildMemberColorMap((users ?? []).map((u) => u.id)), [users]);
 
   /**
    * Place an instant on the grid, in the same timezone the day columns are built in.
@@ -440,25 +457,56 @@ export function CalendarPage() {
   }, [activeRun, dismissedResultIds, dragPreview, dayDateStrings, eventsById, usersById]);
 
   const busyBlocks = useMemo(() => {
-    const blocks: Array<{ key: string; day: number; startMin: number; durationMin: number; label: string; color: string }> = [];
+    type RawBusyBlock = { key: string; day: number; startMin: number; durationMin: number; label: string; color: string };
+    const raw: RawBusyBlock[] = [];
     for (const interval of overview?.busy_intervals ?? []) {
+      if (!visibleMemberIds.has(interval.user_id)) continue;
       const placement = gridPlacement(interval.start_at);
       if (!placement) continue;
       const durationMin = Math.round(
         (new Date(interval.end_at).getTime() - new Date(interval.start_at).getTime()) / 60000,
       );
-      blocks.push({
+      raw.push({
         key: `busy-${interval.id}`,
         day: placement.day,
         startMin: placement.startMin,
         durationMin,
-        label: usersById.get(interval.user_id)?.display_name ?? "Someone",
-        color: userColor(interval.user_id),
+        label: `${usersById.get(interval.user_id)?.display_name ?? "Someone"} (busy)`,
+        color: memberColorMap.get(interval.user_id) ?? "#e5e7eb",
       });
     }
+
+    // Overlapping busy blocks on the same day would otherwise render stacked on top
+    // of each other now that each one carries a visible name label -- split
+    // concurrent blocks into side-by-side lanes so they all stay readable.
+    const byDay = new Map<number, RawBusyBlock[]>();
+    for (const block of raw) {
+      if (!byDay.has(block.day)) byDay.set(block.day, []);
+      byDay.get(block.day)!.push(block);
+    }
+
+    const blocks: Array<RawBusyBlock & { lane: number; laneCount: number }> = [];
+    for (const dayBlocks of byDay.values()) {
+      dayBlocks.sort((a, b) => a.startMin - b.startMin);
+      const laneEndMin: number[] = [];
+      const withLanes: Array<RawBusyBlock & { lane: number }> = [];
+      for (const block of dayBlocks) {
+        let lane = laneEndMin.findIndex((end) => end <= block.startMin);
+        if (lane === -1) {
+          lane = laneEndMin.length;
+          laneEndMin.push(block.startMin + block.durationMin);
+        } else {
+          laneEndMin[lane] = block.startMin + block.durationMin;
+        }
+        withLanes.push({ ...block, lane });
+      }
+      const laneCount = laneEndMin.length;
+      for (const block of withLanes) blocks.push({ ...block, laneCount });
+    }
+
     return blocks;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [overview, usersById, dayDateStrings]);
+  }, [overview, usersById, dayDateStrings, visibleMemberIds, memberColorMap]);
 
   const confirmedBlocks = useMemo(() => {
     const blocks: Array<{
@@ -535,61 +583,92 @@ export function CalendarPage() {
             type="button"
             onClick={() => setPanelCollapsed(false)}
             className="shrink-0 size-8 rounded-lg border flex items-center justify-center text-muted-foreground hover:bg-accent/50"
-            title="Show dances panel"
+            title="Show sidebar"
           >
             <ChevronRight className="size-4" />
           </button>
         ) : (
-          <Card className="w-72 shrink-0 p-5">
-            <div className="flex items-center justify-between mb-1">
-              <div className="text-base font-bold">Dances</div>
-              <button
-                type="button"
-                onClick={() => setPanelCollapsed(true)}
-                className="text-muted-foreground hover:text-foreground text-sm px-1"
-                title="Hide panel"
-              >
-                <ChevronLeft className="size-4" />
-              </button>
-            </div>
-            <p className="text-xs text-muted-foreground mb-3">Choose which dances to show and schedule.</p>
+          <div className="flex flex-col gap-5 w-72 shrink-0">
+            <Card className="p-5">
+              <div className="flex items-center justify-between mb-1">
+                <div className="text-base font-bold">Dances</div>
+                <button
+                  type="button"
+                  onClick={() => setPanelCollapsed(true)}
+                  className="text-muted-foreground hover:text-foreground text-sm px-1"
+                  title="Hide panel"
+                >
+                  <ChevronLeft className="size-4" />
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground mb-3">Choose which dances to show and schedule.</p>
 
-            <div className="flex flex-col gap-2.5 mb-4">
-              {(events ?? []).map((eventItem) => (
-                <div key={eventItem.id} className="flex items-center gap-2.5">
-                  <Checkbox
-                    checked={checkedIds.has(eventItem.id)}
-                    onCheckedChange={(checked) =>
-                      setCheckedIds((prev) => {
-                        const next = new Set(prev);
-                        if (checked) next.add(eventItem.id);
-                        else next.delete(eventItem.id);
-                        return next;
-                      })
-                    }
-                  />
-                  <span className="size-2.5 rounded-full shrink-0" style={{ background: eventColor(eventItem.id) }} />
-                  <span className="flex-1 min-w-0 text-sm truncate">{eventItem.name}</span>
-                  <Badge
-                    variant={
-                      eventItem.status === "scheduled" ? "success" : eventItem.status === "partially_scheduled" ? "warning" : "outline"
-                    }
-                    className="text-[10px] whitespace-nowrap"
-                  >
-                    {eventItem.status.replace("_", " ")}
-                  </Badge>
-                </div>
-              ))}
-              {(events ?? []).length === 0 && <p className="text-xs text-muted-foreground">No dances yet &mdash; add one on the Events page.</p>}
-            </div>
+              <div className="flex flex-col gap-2.5 mb-4">
+                {(events ?? []).map((eventItem) => (
+                  <div key={eventItem.id} className="flex items-center gap-2.5">
+                    <Checkbox
+                      checked={checkedIds.has(eventItem.id)}
+                      onCheckedChange={(checked) =>
+                        setCheckedIds((prev) => {
+                          const next = new Set(prev);
+                          if (checked) next.add(eventItem.id);
+                          else next.delete(eventItem.id);
+                          return next;
+                        })
+                      }
+                    />
+                    <span className="size-2.5 rounded-full shrink-0" style={{ background: eventColor(eventItem.id) }} />
+                    <span className="flex-1 min-w-0 text-sm truncate">{eventItem.name}</span>
+                    <Badge
+                      variant={
+                        eventItem.status === "scheduled" ? "success" : eventItem.status === "partially_scheduled" ? "warning" : "outline"
+                      }
+                      className="text-[10px] whitespace-nowrap"
+                    >
+                      {eventItem.status.replace("_", " ")}
+                    </Badge>
+                  </div>
+                ))}
+                {(events ?? []).length === 0 && <p className="text-xs text-muted-foreground">No dances yet &mdash; add one on the Events page.</p>}
+              </div>
 
-            <Button className="w-full mb-2" variant="secondary" onClick={handleSuggestSessions} disabled={createRun.isPending}>
-              <Sparkles className="size-4" /> Suggest sessions
-            </Button>
-            <Button className="w-full" onClick={handleNewEvent} disabled={createRun.isPending}>
-              <Plus className="size-4" /> New event
-            </Button>
-          </Card>
+              <Button className="w-full mb-2" variant="secondary" onClick={handleSuggestSessions} disabled={createRun.isPending}>
+                <Sparkles className="size-4" /> Suggest sessions
+              </Button>
+              <Button className="w-full" onClick={handleNewEvent} disabled={createRun.isPending}>
+                <Plus className="size-4" /> New event
+              </Button>
+            </Card>
+
+            <Card className="p-5">
+              <div className="text-base font-bold mb-1">Members</div>
+              <p className="text-xs text-muted-foreground mb-3">Toggle whose busy time shows on the calendar.</p>
+
+              <div className="flex flex-col gap-2.5">
+                {(users ?? []).map((member) => (
+                  <div key={member.id} className="flex items-center gap-2.5">
+                    <Checkbox
+                      checked={visibleMemberIds.has(member.id)}
+                      onCheckedChange={(checked) =>
+                        setVisibleMemberIds((prev) => {
+                          const next = new Set(prev);
+                          if (checked) next.add(member.id);
+                          else next.delete(member.id);
+                          return next;
+                        })
+                      }
+                    />
+                    <span
+                      className="size-2.5 rounded-full shrink-0"
+                      style={{ background: memberColorMap.get(member.id) }}
+                    />
+                    <span className="flex-1 min-w-0 text-sm truncate">{member.display_name}</span>
+                  </div>
+                ))}
+                {(users ?? []).length === 0 && <p className="text-xs text-muted-foreground">No members yet.</p>}
+              </div>
+            </Card>
+          </div>
         )}
 
         <Card className="flex-1 min-w-0 overflow-x-auto p-0">
@@ -627,25 +706,34 @@ export function CalendarPage() {
                 {busyBlocks.map((block) => {
                   const top = (block.startMin - DAY_START_MIN) * PX_PER_MIN;
                   const height = block.durationMin * PX_PER_MIN;
-                  const widthPct = 100 / 7;
+                  const dayWidthPct = 100 / 7;
+                  const laneWidthPct = dayWidthPct / block.laneCount;
+                  const left = block.day * dayWidthPct + block.lane * laneWidthPct;
                   return (
                     <div
                       key={block.key}
-                      title={`${block.label} is busy`}
+                      title={block.label}
                       style={{
                         position: "absolute",
                         top,
                         height,
-                        left: `calc(${block.day * widthPct}% + 3px)`,
-                        width: `calc(${widthPct}% - 6px)`,
+                        left: `calc(${left}% + 3px)`,
+                        width: `calc(${laneWidthPct}% - 6px)`,
                         borderRadius: 6,
                         border: `1px solid ${block.color}`,
                         borderLeft: `3px solid ${block.color}`,
                         background: `${block.color}33`,
                         boxSizing: "border-box",
+                        overflow: "hidden",
                         pointerEvents: "none",
                       }}
-                    />
+                    >
+                      {height >= 20 && (
+                        <div className="text-[9px] font-semibold truncate px-1 pt-0.5" style={{ color: "#1f2937" }}>
+                          {block.label}
+                        </div>
+                      )}
+                    </div>
                   );
                 })}
 
