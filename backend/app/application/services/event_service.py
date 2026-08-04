@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import select
@@ -55,7 +54,7 @@ class EventService:
         )
         return list(self.db.scalars(statement))
 
-    def get_event(self, event_id: UUID) -> Optional[DanceEvent]:
+    def get_event(self, event_id: UUID) -> DanceEvent | None:
         statement = (
             select(DanceEvent)
             .where(DanceEvent.id == event_id)
@@ -63,7 +62,7 @@ class EventService:
         )
         return self.db.scalars(statement).one_or_none()
 
-    def update_event(self, event_id: UUID, payload: DanceEventUpdate) -> Optional[DanceEvent]:
+    def update_event(self, event_id: UUID, payload: DanceEventUpdate) -> DanceEvent | None:
         event = self.get_event(event_id)
         if event is None:
             return None
@@ -105,7 +104,7 @@ class EventService:
         self.db.commit()
         return self.get_event(event.id)
 
-    def list_sessions(self, event_id: UUID) -> Optional[list[PracticeSession]]:
+    def list_sessions(self, event_id: UUID) -> list[PracticeSession] | None:
         event = self.get_event(event_id)
         if event is None:
             return None

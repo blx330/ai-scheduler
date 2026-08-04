@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 import logging
-from typing import Any, Optional, Protocol
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Any, Protocol
 from urllib.parse import quote, urlencode
-
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -26,9 +25,9 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class GoogleOAuthTokens:
     access_token: str
-    refresh_token: Optional[str]
+    refresh_token: str | None
     expires_at: datetime
-    scope: Optional[str] = None
+    scope: str | None = None
     token_type: str = "Bearer"
 
 
@@ -38,7 +37,7 @@ class GoogleCalendarSummary:
     summary: str
     primary: bool
     access_role: str
-    time_zone: Optional[str]
+    time_zone: str | None
 
 
 @dataclass(frozen=True)
@@ -51,7 +50,7 @@ class GoogleBusyInterval:
 @dataclass(frozen=True)
 class GoogleCreatedEvent:
     event_id: str
-    html_link: Optional[str]
+    html_link: str | None
     status: str
     calendar_id: str
     start_at: datetime
@@ -89,7 +88,7 @@ class GoogleCalendarProvider(Protocol):
         end_at: datetime,
         timezone_name: str,
         attendee_emails: list[str],
-        description: Optional[str] = None,
+        description: str | None = None,
     ) -> GoogleCreatedEvent:
         ...
 
@@ -212,8 +211,8 @@ class GoogleCalendarClient:
             GOOGLE_FREEBUSY_URL,
             headers=self._auth_headers(access_token),
             json={
-                "timeMin": time_min.astimezone(timezone.utc).isoformat(),
-                "timeMax": time_max.astimezone(timezone.utc).isoformat(),
+                "timeMin": time_min.astimezone(UTC).isoformat(),
+                "timeMax": time_max.astimezone(UTC).isoformat(),
                 "items": [{"id": calendar_id} for calendar_id in calendar_ids],
             },
             timeout=30,
@@ -256,7 +255,7 @@ class GoogleCalendarClient:
         end_at: datetime,
         timezone_name: str,
         attendee_emails: list[str],
-        description: Optional[str] = None,
+        description: str | None = None,
     ) -> GoogleCreatedEvent:
         encoded_calendar_id = quote(calendar_id, safe="")
         response = self._requests().post(
@@ -266,11 +265,11 @@ class GoogleCalendarClient:
                 "summary": title,
                 "description": description,
                 "start": {
-                    "dateTime": start_at.astimezone(timezone.utc).isoformat(),
+                    "dateTime": start_at.astimezone(UTC).isoformat(),
                     "timeZone": timezone_name,
                 },
                 "end": {
-                    "dateTime": end_at.astimezone(timezone.utc).isoformat(),
+                    "dateTime": end_at.astimezone(UTC).isoformat(),
                     "timeZone": timezone_name,
                 },
                 "attendees": [{"email": email} for email in attendee_emails],
@@ -304,11 +303,11 @@ class GoogleCalendarClient:
             headers=self._auth_headers(access_token),
             json={
                 "start": {
-                    "dateTime": start_at.astimezone(timezone.utc).isoformat(),
+                    "dateTime": start_at.astimezone(UTC).isoformat(),
                     "timeZone": timezone_name,
                 },
                 "end": {
-                    "dateTime": end_at.astimezone(timezone.utc).isoformat(),
+                    "dateTime": end_at.astimezone(UTC).isoformat(),
                     "timeZone": timezone_name,
                 },
             },
@@ -357,7 +356,7 @@ class GoogleCalendarClient:
 
     @staticmethod
     def _build_tokens(payload: dict[str, Any]) -> GoogleOAuthTokens:
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(payload.get("expires_in", 3600)))
+        expires_at = datetime.now(UTC) + timedelta(seconds=int(payload.get("expires_in", 3600)))
         return GoogleOAuthTokens(
             access_token=payload["access_token"],
             refresh_token=payload.get("refresh_token"),
@@ -446,7 +445,7 @@ class NoopGoogleCalendarProvider:
         end_at: datetime,
         timezone_name: str,
         attendee_emails: list[str],
-        description: Optional[str] = None,
+        description: str | None = None,
     ) -> GoogleCreatedEvent:
         self._raise_unconfigured("create_event")
 
@@ -471,9 +470,9 @@ class NoopGoogleCalendarProvider:
 
 
 def build_google_calendar_client(
-    client_id: Optional[str],
-    client_secret: Optional[str],
-    redirect_uri: Optional[str],
+    client_id: str | None,
+    client_secret: str | None,
+    redirect_uri: str | None,
 ) -> GoogleCalendarProvider:
     missing_env_vars = []
     if not client_id or not client_id.strip():

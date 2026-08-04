@@ -11,6 +11,7 @@ export const queryKeys = {
     ["calendar-overview", start, end, [...userIds].sort().join(",")] as const,
   googleConnection: (userId: string) => ["google-connection", userId] as const,
   googleCalendars: (userId: string) => ["google-calendars", userId] as const,
+  health: ["health"] as const,
 };
 
 export function errorMessage(error: unknown): string {

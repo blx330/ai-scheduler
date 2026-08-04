@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -17,7 +16,7 @@ class TimeRangePreference(BaseModel):
     weight: float = Field(default=1.0, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
-    def validate_range(self) -> "TimeRangePreference":
+    def validate_range(self) -> TimeRangePreference:
         if self.start_local >= self.end_local:
             raise ValueError("Time range start must be before end")
         return self
@@ -34,10 +33,10 @@ class CachedPracticePreference(BaseModel):
 
     preferred_days: list[str] = Field(default_factory=list)
     avoid_days: list[str] = Field(default_factory=list)
-    earliest_time: Optional[str] = Field(default=None, pattern=r"^\d{2}:\d{2}$")
-    latest_time: Optional[str] = Field(default=None, pattern=r"^\d{2}:\d{2}$")
-    notes: Optional[str] = None
-    summary: Optional[str] = None
+    earliest_time: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")
+    latest_time: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")
+    notes: str | None = None
+    summary: str | None = None
 
     @field_validator("preferred_days", "avoid_days", mode="before")
     @classmethod
@@ -54,7 +53,7 @@ class CachedPracticePreference(BaseModel):
         return normalized
 
     @model_validator(mode="after")
-    def validate_times(self) -> "CachedPracticePreference":
+    def validate_times(self) -> CachedPracticePreference:
         if self.earliest_time and self.latest_time and self.earliest_time >= self.latest_time:
             raise ValueError("Earliest time must be before latest time")
         return self
@@ -82,7 +81,7 @@ class ParsedPreference(BaseModel):
     disallowed_weekdays: list[Weekday] = Field(default_factory=list)
     preferred_time_ranges: list[TimeRangePreference] = Field(default_factory=list)
     disallowed_time_ranges: list[TimeRangePreference] = Field(default_factory=list)
-    notes: Optional[str] = None
+    notes: str | None = None
 
     @field_validator("timezone")
     @classmethod
@@ -96,7 +95,7 @@ class ParsedPreference(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def validate_overlap(self) -> "ParsedPreference":
+    def validate_overlap(self) -> ParsedPreference:
         if set(self.preferred_weekdays) & set(self.disallowed_weekdays):
             raise ValueError("A weekday cannot be both preferred and disallowed")
         return self
@@ -113,23 +112,29 @@ def build_preferred_practice_time_range(preference: PreferredPracticeTime) -> Ti
 
 
 def merge_parsed_preferences(
-    base_preference: Optional[ParsedPreference],
-    overlay_preference: Optional[ParsedPreference],
+    base_preference: ParsedPreference | None,
+    overlay_preference: ParsedPreference | None,
     timezone_name: str,
-) -> Optional[ParsedPreference]:
+) -> ParsedPreference | None:
     if base_preference is None:
         return overlay_preference
     if overlay_preference is None:
         return base_preference
 
+    def _is_duplicate_range(item, existing_ranges) -> bool:
+        return any(
+            existing.start_local == item.start_local and existing.end_local == item.end_local
+            for existing in existing_ranges
+        )
+
     preferred_time_ranges = list(base_preference.preferred_time_ranges)
     for item in overlay_preference.preferred_time_ranges:
-        if not any(existing.start_local == item.start_local and existing.end_local == item.end_local for existing in preferred_time_ranges):
+        if not _is_duplicate_range(item, preferred_time_ranges):
             preferred_time_ranges.append(item)
 
     disallowed_time_ranges = list(base_preference.disallowed_time_ranges)
     for item in overlay_preference.disallowed_time_ranges:
-        if not any(existing.start_local == item.start_local and existing.end_local == item.end_local for existing in disallowed_time_ranges):
+        if not _is_duplicate_range(item, disallowed_time_ranges):
             disallowed_time_ranges.append(item)
 
     return ParsedPreference.model_validate(
@@ -152,10 +157,10 @@ def merge_parsed_preferences(
 
 
 def merge_preferred_practice_time(
-    preference: Optional[ParsedPreference],
+    preference: ParsedPreference | None,
     timezone_name: str,
-    preferred_practice_time: Optional[Union[PreferredPracticeTime, str]],
-) -> Optional[ParsedPreference]:
+    preferred_practice_time: PreferredPracticeTime | str | None,
+) -> ParsedPreference | None:
     if preferred_practice_time is None:
         return preference
 
@@ -179,10 +184,10 @@ def merge_preferred_practice_time(
 
 
 def merge_cached_practice_preference(
-    preference: Optional[ParsedPreference],
+    preference: ParsedPreference | None,
     timezone_name: str,
-    cached_payload: Optional[dict],
-) -> Optional[ParsedPreference]:
+    cached_payload: dict | None,
+) -> ParsedPreference | None:
     if not cached_payload:
         return preference
     try:
@@ -196,7 +201,7 @@ def merge_cached_practice_preference(
 def cached_practice_preference_to_parsed_preference(
     cached_preference: CachedPracticePreference,
     timezone_name: str,
-) -> Optional[ParsedPreference]:
+) -> ParsedPreference | None:
     if not cached_preference.is_useful():
         return None
 
@@ -251,7 +256,7 @@ def _merge_weekdays(base_weekdays: list[Weekday], overlay_weekdays: list[Weekday
     return merged
 
 
-def _normalize_day_name(value: object) -> Optional[str]:
+def _normalize_day_name(value: object) -> str | None:
     if value is None:
         return None
     token = str(value).strip().lower()

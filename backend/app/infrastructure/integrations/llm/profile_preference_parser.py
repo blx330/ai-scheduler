@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Optional, Protocol
+from typing import Any, Protocol
 
 from app.domain.preferences.models import CachedPracticePreference, summarize_cached_preference
 
-GEMINI_PROFILE_MODEL = "gemini-2.5-flash"
+GEMINI_PROFILE_MODEL = "gemini-3.5-flash"
 logger = logging.getLogger(__name__)
 
 
@@ -165,7 +165,7 @@ def _extract_json_text(text: str) -> str:
     return cleaned[start_index : end_index + 1]
 
 
-def _extract_time(text: str, patterns: list[str]) -> Optional[str]:
+def _extract_time(text: str, patterns: list[str]) -> str | None:
     for pattern in patterns:
         match = re.search(pattern, text)
         if match:
@@ -173,7 +173,7 @@ def _extract_time(text: str, patterns: list[str]) -> Optional[str]:
     return None
 
 
-def _normalize_time_value(value: Any) -> Optional[str]:
+def _normalize_time_value(value: Any) -> str | None:
     if value is None:
         return None
     token = str(value).strip().lower()
@@ -195,7 +195,7 @@ def _normalize_time_value(value: Any) -> Optional[str]:
     return f"{hour:02d}:{minute:02d}"
 
 
-def _normalize_text(value: Any) -> Optional[str]:
+def _normalize_text(value: Any) -> str | None:
     if value is None:
         return None
     text = str(value).strip()

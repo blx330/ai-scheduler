@@ -12,6 +12,7 @@ import type {
   GoogleCalendarSelectionUpdate,
   GoogleCalendarSummary,
   GoogleOAuthStartResponse,
+  HealthRead,
   PlanningRunConfirmRequest,
   PlanningRunConfirmResponse,
   PlanningRunCreate,
@@ -24,6 +25,10 @@ import type {
   UserRead,
   UserUpdate,
 } from "./types";
+
+export const healthApi = {
+  get: () => api.get<HealthRead>("/health"),
+};
 
 export const usersApi = {
   list: () => api.get<UserRead[]>("/users"),

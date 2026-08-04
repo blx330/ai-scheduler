@@ -1,5 +1,7 @@
 # AI Scheduler
 
+[![CI](https://github.com/blx330/ai-scheduler/actions/workflows/ci.yml/badge.svg)](https://github.com/blx330/ai-scheduler/actions/workflows/ci.yml)
+
 I built this as a backend-first scheduling project to practice real scheduling logic, not just CRUD.
 
 At a high level, it does three things:

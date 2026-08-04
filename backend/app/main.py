@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -13,16 +12,17 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
-from app.api.routers import availability, events, google_calendar, health, planning, practices, users
+from app.api.routers import admin, availability, events, google_calendar, health, planning, practices, users
 from app.infrastructure.config import Settings
 from app.infrastructure.db.session import build_session_factory
+from app.infrastructure.demo_guard import DemoGuardMiddleware
 from app.infrastructure.integrations.google_calendar.client import build_google_calendar_client
 from app.infrastructure.integrations.llm.profile_preference_parser import build_user_profile_preference_parser
 from app.infrastructure.scheduling.auto_sync import auto_sync_loop
 
 
 def create_app(
-    settings: Optional[Settings] = None,
+    settings: Settings | None = None,
     session_factory=None,
     user_profile_preference_parser=None,
     google_calendar_client=None,
@@ -37,7 +37,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        sync_task: Optional[asyncio.Task] = None
+        sync_task: asyncio.Task | None = None
         if app_settings.auto_sync_enabled:
             sync_task = asyncio.create_task(auto_sync_loop(session_factory, app_settings, google_calendar_client))
         _app.state.auto_sync_task = sync_task
@@ -57,6 +57,7 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(DemoGuardMiddleware)
     app.state.settings = app_settings
     app.state.session_factory = session_factory
     app.state.user_profile_preference_parser = user_profile_preference_parser or build_user_profile_preference_parser(
@@ -95,6 +96,7 @@ def create_app(
     app.include_router(planning.router, prefix=app_settings.api_prefix)
     app.include_router(practices.router, prefix=app_settings.api_prefix)
     app.include_router(google_calendar.router, prefix=app_settings.api_prefix)
+    app.include_router(admin.router, prefix=app_settings.api_prefix)
 
     static_dir = Path(__file__).resolve().parent / "static"
     if static_dir.exists():
@@ -102,7 +104,7 @@ def create_app(
     return app
 
 
-_app: Optional[FastAPI] = None
+_app: FastAPI | None = None
 
 
 def __getattr__(name: str) -> FastAPI:

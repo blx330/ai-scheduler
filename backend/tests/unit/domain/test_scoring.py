@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -10,8 +10,8 @@ from app.domain.scheduling.scoring import preference_bonus_for_user, score_slot,
 
 def test_preference_bonus_caps_to_one_signal_per_category() -> None:
     slot = ScheduleSlot(
-        start_at=datetime(2026, 3, 23, 10, 0, tzinfo=timezone.utc),
-        end_at=datetime(2026, 3, 23, 11, 0, tzinfo=timezone.utc),
+        start_at=datetime(2026, 3, 23, 10, 0, tzinfo=UTC),
+        end_at=datetime(2026, 3, 23, 11, 0, tzinfo=UTC),
     )
     preference = ParsedPreference.model_validate(
         {
@@ -35,8 +35,8 @@ def test_preference_bonus_caps_to_one_signal_per_category() -> None:
 
 def test_score_slot_counts_optional_and_preference_bonuses() -> None:
     slot = ScheduleSlot(
-        start_at=datetime(2026, 3, 23, 10, 0, tzinfo=timezone.utc),
-        end_at=datetime(2026, 3, 23, 11, 0, tzinfo=timezone.utc),
+        start_at=datetime(2026, 3, 23, 10, 0, tzinfo=UTC),
+        end_at=datetime(2026, 3, 23, 11, 0, tzinfo=UTC),
     )
     preference = ParsedPreference.model_validate(
         {
@@ -76,20 +76,20 @@ def test_score_slot_counts_optional_and_preference_bonuses() -> None:
 
 def test_time_tier_scoring_prioritizes_evening_slots() -> None:
     tier_1_slot = ScheduleSlot(
-        start_at=datetime(2026, 3, 23, 18, 0, tzinfo=timezone.utc),
-        end_at=datetime(2026, 3, 23, 19, 0, tzinfo=timezone.utc),
+        start_at=datetime(2026, 3, 23, 18, 0, tzinfo=UTC),
+        end_at=datetime(2026, 3, 23, 19, 0, tzinfo=UTC),
     )
     tier_2_slot_afternoon = ScheduleSlot(
-        start_at=datetime(2026, 3, 23, 16, 0, tzinfo=timezone.utc),
-        end_at=datetime(2026, 3, 23, 17, 0, tzinfo=timezone.utc),
+        start_at=datetime(2026, 3, 23, 16, 0, tzinfo=UTC),
+        end_at=datetime(2026, 3, 23, 17, 0, tzinfo=UTC),
     )
     tier_2_slot_late = ScheduleSlot(
-        start_at=datetime(2026, 3, 23, 22, 0, tzinfo=timezone.utc),
-        end_at=datetime(2026, 3, 23, 23, 0, tzinfo=timezone.utc),
+        start_at=datetime(2026, 3, 23, 22, 0, tzinfo=UTC),
+        end_at=datetime(2026, 3, 23, 23, 0, tzinfo=UTC),
     )
     tier_3_slot = ScheduleSlot(
-        start_at=datetime(2026, 3, 23, 10, 0, tzinfo=timezone.utc),
-        end_at=datetime(2026, 3, 23, 11, 0, tzinfo=timezone.utc),
+        start_at=datetime(2026, 3, 23, 10, 0, tzinfo=UTC),
+        end_at=datetime(2026, 3, 23, 11, 0, tzinfo=UTC),
     )
 
     assert score_time_tier(tier_1_slot, "UTC") == 6.0
@@ -103,7 +103,7 @@ NY = "America/New_York"
 
 def _ny_slot(start_hour: int, duration_minutes: int, day: int = 23) -> ScheduleSlot:
     """A slot expressed in New York wall-clock time."""
-    start = datetime(2026, 3, day, start_hour, 0, tzinfo=ZoneInfo(NY)).astimezone(timezone.utc)
+    start = datetime(2026, 3, day, start_hour, 0, tzinfo=ZoneInfo(NY)).astimezone(UTC)
     return ScheduleSlot.from_start(start, duration_minutes)
 
 

@@ -1,15 +1,17 @@
 import asyncio
-from datetime import datetime, timezone
-from datetime import timedelta
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
 
 from app.infrastructure.config import Settings
 from app.infrastructure.db.models import CalendarBusyInterval, CalendarConnection
-from app.infrastructure.integrations.google_calendar.client import GoogleBusyInterval, GoogleCalendarSummary, GoogleCreatedEvent
-from app.infrastructure.integrations.google_calendar.client import GoogleOAuthTokens
+from app.infrastructure.integrations.google_calendar.client import (
+    GoogleBusyInterval,
+    GoogleCalendarSummary,
+    GoogleCreatedEvent,
+    GoogleOAuthTokens,
+)
 from app.infrastructure.integrations.llm.profile_preference_parser import GeminiUserProfilePreferenceParser
 from app.main import create_app
 
@@ -322,9 +324,9 @@ def test_connected_google_users_can_plan_without_manual_availability(client, app
             refresh_token="refresh-attendee",
             selected_busy_calendar_ids_json=["primary"],
             # a busy sync has actually covered this window, so free time inside it is known
-            busy_synced_at=datetime(2026, 3, 22, 0, 0, tzinfo=timezone.utc),
-            busy_synced_start_at=datetime(2026, 3, 23, 0, 0, tzinfo=timezone.utc),
-            busy_synced_end_at=datetime(2026, 3, 24, 0, 0, tzinfo=timezone.utc),
+            busy_synced_at=datetime(2026, 3, 22, 0, 0, tzinfo=UTC),
+            busy_synced_start_at=datetime(2026, 3, 23, 0, 0, tzinfo=UTC),
+            busy_synced_end_at=datetime(2026, 3, 24, 0, 0, tzinfo=UTC),
         )
         session.add(organizer_connection)
         session.add(attendee_connection)
@@ -333,8 +335,8 @@ def test_connected_google_users_can_plan_without_manual_availability(client, app
             CalendarBusyInterval(
                 user_id=attendee["id"],
                 calendar_connection_id=attendee_connection.id,
-                start_at=datetime(2026, 3, 23, 8, 0, tzinfo=timezone.utc),
-                end_at=datetime(2026, 3, 23, 9, 0, tzinfo=timezone.utc),
+                start_at=datetime(2026, 3, 23, 8, 0, tzinfo=UTC),
+                end_at=datetime(2026, 3, 23, 9, 0, tzinfo=UTC),
             )
         )
         session.commit()
@@ -452,7 +454,7 @@ def test_google_connection_with_identity_only_scope_requires_reconnect(client, a
                 access_token="live-token",
                 refresh_token="refresh-token",
                 scopes="openid email profile",
-                token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                token_expires_at=datetime.now(UTC) + timedelta(hours=1),
             )
         )
         session.commit()
@@ -470,8 +472,8 @@ def test_google_busy_sync_persists_selected_calendars_and_overview_returns_inter
     selected_calendar_id = "dance-team@example.com"
     synced_interval = GoogleBusyInterval(
         calendar_id=selected_calendar_id,
-        start_at=datetime(2026, 3, 24, 14, 0, tzinfo=timezone.utc),
-        end_at=datetime(2026, 3, 24, 16, 0, tzinfo=timezone.utc),
+        start_at=datetime(2026, 3, 24, 14, 0, tzinfo=UTC),
+        end_at=datetime(2026, 3, 24, 16, 0, tzinfo=UTC),
     )
 
     class FakeGoogleClient:
@@ -524,7 +526,7 @@ def test_google_busy_sync_persists_selected_calendars_and_overview_returns_inter
             end_at: datetime,
             timezone_name: str,
             attendee_emails: list[str],
-            description: Optional[str] = None,
+            description: str | None = None,
         ) -> GoogleCreatedEvent:  # pragma: no cover - unused in this test
             raise NotImplementedError
 
@@ -545,7 +547,7 @@ def test_google_busy_sync_persists_selected_calendars_and_overview_returns_inter
                 status="connected",
                 access_token="live-token",
                 scopes="https://www.googleapis.com/auth/calendar",
-                token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                token_expires_at=datetime.now(UTC) + timedelta(hours=1),
             )
         )
         session.commit()
@@ -574,8 +576,8 @@ def test_google_busy_sync_persists_selected_calendars_and_overview_returns_inter
     assert sync_response.json()["calendar_ids"] == [selected_calendar_id]
     assert fake_client.last_free_busy_request == {
         "calendar_ids": [selected_calendar_id],
-        "time_min": datetime(2026, 3, 23, 0, 0, tzinfo=timezone.utc),
-        "time_max": datetime(2026, 3, 30, 0, 0, tzinfo=timezone.utc),
+        "time_min": datetime(2026, 3, 23, 0, 0, tzinfo=UTC),
+        "time_max": datetime(2026, 3, 30, 0, 0, tzinfo=UTC),
     }
 
     overview_response = client.get(
@@ -618,7 +620,7 @@ def test_google_oauth_state_links_connection_to_requested_user(client, app) -> N
             return GoogleOAuthTokens(
                 access_token="token-from-exchange",
                 refresh_token="refresh-from-exchange",
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
                 scope="https://www.googleapis.com/auth/calendar",
             )
 
@@ -640,7 +642,7 @@ def test_google_oauth_state_links_connection_to_requested_user(client, app) -> N
             end_at: datetime,
             timezone_name: str,
             attendee_emails: list[str],
-            description: Optional[str] = None,
+            description: str | None = None,
         ) -> GoogleCreatedEvent:  # pragma: no cover - unused
             raise NotImplementedError
 
