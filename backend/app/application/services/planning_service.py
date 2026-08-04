@@ -1,17 +1,17 @@
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from datetime import date, datetime, timedelta
-import logging
 from types import SimpleNamespace
-from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import false, select
+from sqlalchemy import false, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.schemas.planning import PlanningRunCreate
+from app.application.services.google_calendar_service import GoogleCalendarService
 from app.domain.availability.interval_ops import build_effective_availability
 from app.domain.common.datetime_utils import ensure_utc
 from app.domain.common.time_of_day import contained_in_range, slot_minutes
@@ -28,8 +28,8 @@ from app.domain.scheduling.global_planner import (
 )
 from app.domain.scheduling.models import ParticipantContext
 from app.infrastructure.db.models import (
-    CalendarConnection,
     CalendarBusyInterval,
+    CalendarConnection,
     DanceEvent,
     PlanningRun,
     PlanningRunResult,
@@ -37,7 +37,6 @@ from app.infrastructure.db.models import (
     Room,
     User,
 )
-from app.application.services.google_calendar_service import GoogleCalendarService
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +135,7 @@ class PlanningService:
         self.db.commit()
         return self.get_planning_run(run.id)  # type: ignore[return-value]
 
-    def get_planning_run(self, run_id: UUID) -> Optional[PlanningRun]:
+    def get_planning_run(self, run_id: UUID) -> PlanningRun | None:
         statement = (
             select(PlanningRun)
             .where(PlanningRun.id == run_id)
@@ -151,8 +150,8 @@ class PlanningService:
         self,
         run_id: UUID,
         result_ids: list[UUID],
-        manual_time_overrides: Optional[dict[UUID, tuple[datetime, datetime]]] = None,
-        google_calendar_service: Optional[GoogleCalendarService] = None,
+        manual_time_overrides: dict[UUID, tuple[datetime, datetime]] | None = None,
+        google_calendar_service: GoogleCalendarService | None = None,
     ) -> tuple[PlanningRun, list[PracticeSession], list[str]]:
         run = self.get_planning_run(run_id)
         if run is None:
@@ -288,13 +287,21 @@ class PlanningService:
             )
 
         affected_event_ids = {result.dance_event_id for result in results}
-        affected_events = self.db.scalars(
-            select(DanceEvent)
-            .where(DanceEvent.id.in_(affected_event_ids))
-            .options(selectinload(DanceEvent.practice_sessions))
-        )
+        affected_events = self.db.scalars(select(DanceEvent).where(DanceEvent.id.in_(affected_event_ids)))
         for event in affected_events:
-            confirmed_count = _count_confirmed_sessions(event.practice_sessions)
+            # Query confirmed sessions directly rather than via event.practice_sessions:
+            # that relationship was already eager-loaded (as of *before* this call's new
+            # confirmations) by the selectinload on the `results` query above, and a
+            # second selectinload on an already-loaded collection doesn't refresh it --
+            # so counting off it silently undercounts by exactly the sessions just
+            # confirmed in this call. This is the same direct-count pattern
+            # unschedule_practice_session uses below for the same reason.
+            confirmed_count = self.db.scalar(
+                select(func.count())
+                .select_from(PracticeSession)
+                .where(PracticeSession.dance_event_id == event.id)
+                .where(PracticeSession.status == "confirmed")
+            )
             event.status = _derive_event_status(event.required_session_count, confirmed_count)
             self.db.add(event)
 
@@ -325,7 +332,7 @@ class PlanningService:
             warnings,
         )
 
-    def get_practice_session(self, practice_session_id: UUID) -> Optional[PracticeSession]:
+    def get_practice_session(self, practice_session_id: UUID) -> PracticeSession | None:
         statement = (
             select(PracticeSession)
             .where(PracticeSession.id == practice_session_id)
@@ -343,8 +350,8 @@ class PlanningService:
         start_at: datetime,
         end_at: datetime,
         override_conflicts: bool = False,
-        google_calendar_service: Optional[GoogleCalendarService] = None,
-    ) -> tuple[PracticeSession, bool, Optional[str]]:
+        google_calendar_service: GoogleCalendarService | None = None,
+    ) -> tuple[PracticeSession, bool, str | None]:
         session = self.get_practice_session(practice_session_id)
         if session is None:
             raise ValueError("Practice session not found")
@@ -433,7 +440,7 @@ class PlanningService:
 
         return session, google_updated, warning
 
-    def unschedule_practice_session(self, practice_session_id: UUID) -> Optional[PracticeSession]:
+    def unschedule_practice_session(self, practice_session_id: UUID) -> PracticeSession | None:
         session = self.get_practice_session(practice_session_id)
         if session is None:
             return None
@@ -456,7 +463,7 @@ class PlanningService:
         self,
         horizon_start,
         horizon_end,
-        user_ids: Optional[list[UUID]] = None,
+        user_ids: list[UUID] | None = None,
     ) -> tuple[list[CalendarBusyInterval], list[PracticeSession]]:
         start_at = ensure_utc(horizon_start)
         end_at = ensure_utc(horizon_end)
@@ -533,7 +540,9 @@ class PlanningService:
             )
 
         manual_by_user = defaultdict(list)
-        from app.infrastructure.db.models import ManualAvailabilityInterval  # local import to avoid circular lint noise
+        from app.infrastructure.db.models import (
+            ManualAvailabilityInterval,  # local import to avoid circular lint noise
+        )
 
         for interval in self.db.scalars(
             select(ManualAvailabilityInterval)
@@ -579,7 +588,8 @@ class PlanningService:
                     busy_intervals=busy_by_user.get(participant.user_id, []),
                 )
                 logger.info(
-                    "planning participant availability event=%s user=%s role=%s manual_intervals=%s busy_intervals=%s effective_intervals=%s",
+                    "planning participant availability event=%s user=%s role=%s manual_intervals=%s "
+                    "busy_intervals=%s effective_intervals=%s",
                     event.id,
                     participant.user_id,
                     participant.role,
@@ -619,7 +629,9 @@ class PlanningService:
                 organizer.preferred_practice_time,
             )
             logger.info(
-                "planning event input event=%s name=%s duration_minutes=%s earliest_start_date=%s min_days_apart=%s latest_schedule_at=%s pending_session_indices=%s sessions_remaining=%s required_participants=%s",
+                "planning event input event=%s name=%s duration_minutes=%s earliest_start_date=%s "
+                "min_days_apart=%s latest_schedule_at=%s pending_session_indices=%s sessions_remaining=%s "
+                "required_participants=%s",
                 event.id,
                 event.name,
                 event.duration_minutes,
@@ -691,7 +703,7 @@ class PlanningService:
             )
         return reservations
 
-    def _get_or_create_room(self, room_id: Optional[UUID]) -> Room:
+    def _get_or_create_room(self, room_id: UUID | None) -> Room:
         if room_id is not None:
             room = self.db.get(Room, room_id)
             if room is None or not room.is_active:
@@ -737,10 +749,6 @@ def _derive_event_status(required_session_count: int, confirmed_session_count: i
     return "partially_scheduled"
 
 
-def _count_confirmed_sessions(practice_sessions: list[PracticeSession]) -> int:
-    return sum(1 for session in practice_sessions if session.status == "confirmed")
-
-
 def _pending_session_indices(event: DanceEvent) -> tuple[int, ...]:
     """Session indices that still need a slot.
 
@@ -761,7 +769,7 @@ def _validate_event_constraints(
     start_at: datetime,
     end_at: datetime,
     selected_starts: list[date],
-    exclude_session_id: Optional[UUID] = None,
+    exclude_session_id: UUID | None = None,
 ) -> None:
     organizer_zone = _organizer_zone_for_event(dance_event)
     candidate_start = ensure_utc(start_at)

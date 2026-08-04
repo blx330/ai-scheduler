@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, time
-from typing import Optional
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from app.domain.common.datetime_utils import ensure_utc
@@ -14,8 +13,8 @@ def generate_candidate_starts(
     duration_minutes: int,
     slot_step_minutes: int,
     organizer_timezone: str,
-    daily_window_start_local: Optional[time],
-    daily_window_end_local: Optional[time],
+    daily_window_start_local: time | None,
+    daily_window_end_local: time | None,
 ) -> list[datetime]:
     results: list[datetime] = []
     cursor = ensure_utc(horizon_start)
@@ -41,8 +40,8 @@ def _within_daily_window(
     start_at: datetime,
     end_at: datetime,
     zone: ZoneInfo,
-    window_start: Optional[time],
-    window_end: Optional[time],
+    window_start: time | None,
+    window_end: time | None,
 ) -> bool:
     if window_start is None or window_end is None:
         return True

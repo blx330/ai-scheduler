@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-def _validate_timezone_aware(value: Optional[datetime]) -> Optional[datetime]:
+def _validate_timezone_aware(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     if value.tzinfo is None or value.utcoffset() is None:
@@ -29,10 +28,10 @@ class DanceEventParticipantCreate(BaseModel):
 
 class DanceEventCreate(BaseModel):
     name: str
-    description: Optional[str] = None
+    description: str | None = None
     organizer_user_id: UUID
     duration_minutes: int
-    earliest_start_date: Optional[date] = None
+    earliest_start_date: date | None = None
     min_days_apart: int = 0
     latest_schedule_at: datetime
     required_session_count: int
@@ -61,39 +60,39 @@ class DanceEventCreate(BaseModel):
 
 
 class DanceEventUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    organizer_user_id: Optional[UUID] = None
-    duration_minutes: Optional[int] = None
-    earliest_start_date: Optional[date] = None
-    min_days_apart: Optional[int] = None
-    latest_schedule_at: Optional[datetime] = None
-    required_session_count: Optional[int] = None
-    status: Optional[str] = None
-    participants: Optional[list[DanceEventParticipantCreate]] = None
+    name: str | None = None
+    description: str | None = None
+    organizer_user_id: UUID | None = None
+    duration_minutes: int | None = None
+    earliest_start_date: date | None = None
+    min_days_apart: int | None = None
+    latest_schedule_at: datetime | None = None
+    required_session_count: int | None = None
+    status: str | None = None
+    participants: list[DanceEventParticipantCreate] | None = None
 
     @field_validator("latest_schedule_at")
     @classmethod
-    def validate_latest_schedule_at(cls, value: Optional[datetime]) -> Optional[datetime]:
+    def validate_latest_schedule_at(cls, value: datetime | None) -> datetime | None:
         return _validate_timezone_aware(value)
 
     @field_validator("duration_minutes", "required_session_count")
     @classmethod
-    def validate_positive(cls, value: Optional[int]) -> Optional[int]:
+    def validate_positive(cls, value: int | None) -> int | None:
         if value is not None and value <= 0:
             raise ValueError("Value must be positive")
         return value
 
     @field_validator("min_days_apart")
     @classmethod
-    def validate_min_days_apart(cls, value: Optional[int]) -> Optional[int]:
+    def validate_min_days_apart(cls, value: int | None) -> int | None:
         if value is not None and value < 0:
             raise ValueError("Minimum days apart must be zero or positive")
         return value
 
     @field_validator("status")
     @classmethod
-    def validate_status(cls, value: Optional[str]) -> Optional[str]:
+    def validate_status(cls, value: str | None) -> str | None:
         if value is not None and value not in {"unscheduled", "partially_scheduled", "scheduled", "completed", "archived"}:
             raise ValueError("Unsupported event status")
         return value
@@ -111,10 +110,10 @@ class DanceEventRead(BaseModel):
 
     id: UUID
     name: str
-    description: Optional[str]
+    description: str | None
     organizer_user_id: UUID
     duration_minutes: int
-    earliest_start_date: Optional[date]
+    earliest_start_date: date | None
     min_days_apart: int
     latest_schedule_at: datetime
     required_session_count: int

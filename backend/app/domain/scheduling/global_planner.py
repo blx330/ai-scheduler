@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
 import logging
-from typing import Any, Optional, Tuple
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, time, timedelta
+from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -37,9 +37,9 @@ class PlanningEventInput:
     dance_name: str
     organizer_user_id: UUID
     organizer_timezone: str
-    organizer_preference: Optional[ParsedPreference]
+    organizer_preference: ParsedPreference | None
     duration_minutes: int
-    earliest_start_date: Optional[date]
+    earliest_start_date: date | None
     min_days_apart: int
     latest_schedule_at: datetime
     # The session indices still needing a slot. Deriving these from a *count* instead
@@ -75,8 +75,8 @@ class SessionReservation:
     # Required attendees only. This drives hard conflict checks, where an optional
     # attendee must not be able to block a booking.
     participant_user_ids: frozenset[UUID]
-    dance_event_id: Optional[UUID] = None
-    session_index: Optional[int] = None
+    dance_event_id: UUID | None = None
+    session_index: int | None = None
     # Everyone counted as present, optional attendees included. This drives
     # availability subtraction, so nobody is scored as attending two events at once.
     attending_user_ids: frozenset[UUID] = frozenset()
@@ -290,7 +290,7 @@ def _build_candidates(
     planning_horizon_start: datetime,
     planning_horizon_end: datetime,
     slot_step_minutes: int,
-    allowed_missing_required: Optional[int],
+    allowed_missing_required: int | None,
     max_results: int,
     require_missing_required: bool = False,
 ) -> list[PlanningRecommendation]:
@@ -371,7 +371,8 @@ def _build_candidates(
                 continue
         recommendations.append(recommendation)
     logger.info(
-        "planning candidates event=%s session_index=%s allowed_missing_required=%s generated_slots=%s accepted=%s rejections=%s horizon_start=%s horizon_end=%s duration_minutes=%s",
+        "planning candidates event=%s session_index=%s allowed_missing_required=%s generated_slots=%s "
+        "accepted=%s rejections=%s horizon_start=%s horizon_end=%s duration_minutes=%s",
         event.dance_event_id,
         session_index,
         allowed_missing_required,
@@ -393,7 +394,7 @@ def _build_candidate_options(
     planning_horizon_start: datetime,
     planning_horizon_end: datetime,
     slot_step_minutes: int,
-    allowed_missing_required: Optional[int],
+    allowed_missing_required: int | None,
     require_missing_required: bool = False,
 ) -> tuple[list[CandidateOption], int, dict[str, int]]:
     prior_session_end, later_session_start = _same_dance_session_bounds(
@@ -541,7 +542,7 @@ def _earliest_candidate_option(
     planning_horizon_start: datetime,
     planning_horizon_end: datetime,
     slot_step_minutes: int,
-) -> Optional[CandidateOption]:
+) -> CandidateOption | None:
     """Earliest placement for one session, preferring slots with every required dancer."""
     for allowed_missing, require_missing in ((0, False), (MAX_FALLBACK_MISSING_REQUIRED, True)):
         options, _, _ = _build_candidate_options(
@@ -571,16 +572,16 @@ def _candidate_horizon_start(event: PlanningEventInput, planning_horizon_start: 
         PRACTICE_WINDOW_START_LOCAL,
         tzinfo=organizer_zone,
     )
-    return max(effective_horizon_start, ensure_utc(local_earliest_start.astimezone(timezone.utc)))
+    return max(effective_horizon_start, ensure_utc(local_earliest_start.astimezone(UTC)))
 
 
 def _same_dance_session_bounds(
     event: PlanningEventInput,
     session_index: int,
     reservations: list[SessionReservation],
-) -> Tuple[Optional[datetime], Optional[datetime]]:
-    prior_session_end: Optional[datetime] = None
-    later_session_start: Optional[datetime] = None
+) -> tuple[datetime | None, datetime | None]:
+    prior_session_end: datetime | None = None
+    later_session_start: datetime | None = None
     for reservation in reservations:
         if reservation.dance_event_id != event.dance_event_id or reservation.session_index is None:
             continue

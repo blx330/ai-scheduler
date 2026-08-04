@@ -1,10 +1,9 @@
-from typing import Optional
 
 from app.infrastructure.integrations.google_calendar.client import GoogleCalendarClient
 
 
 class FakeResponse:
-    def __init__(self, status_code: int, payload: Optional[dict] = None, text: str = "") -> None:
+    def __init__(self, status_code: int, payload: dict | None = None, text: str = "") -> None:
         self.status_code = status_code
         self._payload = payload
         self.text = text

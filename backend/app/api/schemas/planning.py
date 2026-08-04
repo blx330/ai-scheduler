@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -22,7 +21,7 @@ class PlanningRunCreate(BaseModel):
     horizon_start: datetime
     horizon_end: datetime
     slot_step_minutes: int = 60
-    room_id: Optional[UUID] = None
+    room_id: UUID | None = None
 
     @field_validator("horizon_start", "horizon_end")
     @classmethod
@@ -41,7 +40,7 @@ class PlanningRunCreate(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def validate_horizon_span(self) -> "PlanningRunCreate":
+    def validate_horizon_span(self) -> PlanningRunCreate:
         # Planning runs inline in the request, and candidate count scales with
         # (horizon span / slot step). Bound both so a single call cannot pin a worker.
         if self.horizon_end <= self.horizon_start:
@@ -63,7 +62,7 @@ class PlanningRunCreate(BaseModel):
 class PlanningExplanationReasonRead(BaseModel):
     code: str
     message: str
-    score: Optional[float] = None
+    score: float | None = None
     missing_required_user_ids: list[UUID] = Field(default_factory=list)
 
 
@@ -80,7 +79,7 @@ class PlanningParticipantStatusRead(BaseModel):
 
 
 class PlanningRecommendationRead(BaseModel):
-    id: Optional[UUID] = None
+    id: UUID | None = None
     dance_event_id: UUID
     dance_name: str
     session_index: int
@@ -108,7 +107,7 @@ class PlanningRunRead(BaseModel):
     id: UUID
     room_id: UUID
     status: str
-    message: Optional[str] = None
+    message: str | None = None
     horizon_start: datetime
     horizon_end: datetime
     slot_step_minutes: int
@@ -118,7 +117,7 @@ class PlanningRunRead(BaseModel):
 
 class PlanningRunConfirmRequest(BaseModel):
     result_ids: list[UUID] = Field(default_factory=list)
-    confirmations: list["PlanningResultConfirmation"] = Field(default_factory=list)
+    confirmations: list[PlanningResultConfirmation] = Field(default_factory=list)
 
     @field_validator("result_ids")
     @classmethod
@@ -129,7 +128,7 @@ class PlanningRunConfirmRequest(BaseModel):
 
     @field_validator("confirmations")
     @classmethod
-    def validate_confirmations(cls, value: list["PlanningResultConfirmation"]) -> list["PlanningResultConfirmation"]:
+    def validate_confirmations(cls, value: list[PlanningResultConfirmation]) -> list[PlanningResultConfirmation]:
         confirmation_ids = [item.result_id for item in value]
         if len(set(confirmation_ids)) != len(confirmation_ids):
             raise ValueError("Confirmation result ids must be unique")
@@ -151,7 +150,7 @@ class PlanningRunConfirmRequest(BaseModel):
         return overrides
 
     @model_validator(mode="after")
-    def validate_presence(self) -> "PlanningRunConfirmRequest":
+    def validate_presence(self) -> PlanningRunConfirmRequest:
         if not self.confirmed_result_ids:
             raise ValueError("At least one planning result id is required")
         return self
@@ -159,19 +158,19 @@ class PlanningRunConfirmRequest(BaseModel):
 
 class PlanningResultConfirmation(BaseModel):
     result_id: UUID
-    start_at: Optional[datetime] = None
-    end_at: Optional[datetime] = None
+    start_at: datetime | None = None
+    end_at: datetime | None = None
 
     @field_validator("start_at", "end_at")
     @classmethod
-    def validate_datetimes(cls, value: Optional[datetime]) -> Optional[datetime]:
+    def validate_datetimes(cls, value: datetime | None) -> datetime | None:
         if value is None:
             return value
         return _validate_timezone_aware(value)
 
     @field_validator("end_at")
     @classmethod
-    def validate_end_after_start(cls, value: Optional[datetime], info):
+    def validate_end_after_start(cls, value: datetime | None, info):
         if value is None:
             return value
         start_at = info.data.get("start_at")
@@ -188,11 +187,11 @@ class PracticeSessionRead(BaseModel):
     end_at: datetime
     status: str
     room_id: UUID
-    source_run_id: Optional[UUID] = None
-    total_score: Optional[float] = None
-    google_calendar_event_id: Optional[str] = None
-    google_calendar_id: Optional[str] = None
-    google_calendar_html_link: Optional[str] = None
+    source_run_id: UUID | None = None
+    total_score: float | None = None
+    google_calendar_event_id: str | None = None
+    google_calendar_id: str | None = None
+    google_calendar_html_link: str | None = None
     is_fallback: bool
     missing_required_user_ids: list[UUID] = Field(default_factory=list)
     score_breakdown: dict[str, float] = Field(default_factory=dict)
@@ -226,7 +225,7 @@ class PracticeUnscheduleResponse(BaseModel):
     dance_event_id: UUID
     unscheduled: bool
     google_event_deleted: bool
-    warning: Optional[str] = None
+    warning: str | None = None
 
 
 class PracticeRescheduleRequest(BaseModel):
@@ -240,7 +239,7 @@ class PracticeRescheduleRequest(BaseModel):
         return _validate_timezone_aware(value)
 
     @model_validator(mode="after")
-    def validate_end_after_start(self) -> "PracticeRescheduleRequest":
+    def validate_end_after_start(self) -> PracticeRescheduleRequest:
         if self.end_at <= self.start_at:
             raise ValueError("Rescheduled slot end must be after start")
         return self
@@ -249,4 +248,4 @@ class PracticeRescheduleRequest(BaseModel):
 class PracticeRescheduleResponse(BaseModel):
     practice: PracticeSessionRead
     google_event_updated: bool
-    warning: Optional[str] = None
+    warning: str | None = None

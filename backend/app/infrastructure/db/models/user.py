@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import JSON, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -17,12 +16,12 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
-    email: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     timezone: Mapped[str] = mapped_column(String(64), nullable=False)
-    preferred_practice_time: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    preferred_practice_time_raw: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    preferred_practice_time_parsed: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    preferred_practice_time: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    preferred_practice_time_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
+    preferred_practice_time_parsed: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
@@ -37,7 +36,7 @@ class User(Base):
     calendar_busy_intervals = relationship("CalendarBusyInterval", back_populates="user", cascade="all, delete-orphan")
 
     @property
-    def preferred_practice_time_summary(self) -> Optional[str]:
+    def preferred_practice_time_summary(self) -> str | None:
         if self.preferred_practice_time_parsed:
             try:
                 cached = CachedPracticePreference.model_validate(self.preferred_practice_time_parsed)

@@ -1,0 +1,19 @@
+[tool.ruff]
+line-length = 130
+target-version = "py311"
+extend-exclude = [".venv_local", ".venv_verify", "alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# B008/B006: FastAPI's Depends()/Query() defaults are the framework's idiomatic
+# pattern (a fresh value is bound per-request, not mutated), not the mutable-default
+# bug these rules exist to catch.
+ignore = ["B008", "B006"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test fakes/mocks mirror real client method signatures verbatim; wrapping them
+# hurts diffability against the real signature more than it helps readability.
+"tests/**" = ["E501"]
+# alembic/env.py imports app modules only after inserting the repo root onto
+# sys.path — the import must come after that, not before.
+"alembic/env.py" = ["E402"]
