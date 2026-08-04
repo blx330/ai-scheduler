@@ -7,7 +7,7 @@ from typing import Any, Protocol
 
 from app.domain.preferences.models import CachedPracticePreference, summarize_cached_preference
 
-GEMINI_PROFILE_MODEL = "gemini-3.5-flash"
+GEMINI_PROFILE_MODEL = "gemini-3.6-flash"
 logger = logging.getLogger(__name__)
 
 
@@ -43,16 +43,22 @@ class StubUserProfilePreferenceParser:
             if day_name not in preferred_days:
                 preferred_days.append(day_name)
 
+        # The bare "after"/"before"/"by" alternatives below are guarded against being
+        # preceded by "not "/"never " -- otherwise "not before 9am" (an earliest-time
+        # phrase) also matches the latest-time pattern via the "before 9am" substring,
+        # setting earliest_time and latest_time to the same contradictory value.
         earliest_time = _extract_time(
             text,
             [
-                r"(?:not before|never before|no earlier than|earliest(?: time)?|after)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)",
+                r"(?:not before|never before|no earlier than|earliest(?: time)?"
+                r"|(?<!not )(?<!never )after)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)",
             ],
         )
         latest_time = _extract_time(
             text,
             [
-                r"(?:not after|no later than|latest(?: time)?|before|by)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)",
+                r"(?:not after|no later than|latest(?: time)?"
+                r"|(?<!not )(?<!never )before|(?<!not )(?<!never )by)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)",
             ],
         )
 
@@ -72,9 +78,9 @@ class StubUserProfilePreferenceParser:
 class GeminiUserProfilePreferenceParser:
     version = "gemini-profile-v1"
 
-    def __init__(self, api_key: str) -> None:
+    def __init__(self, api_key: str, model: str = GEMINI_PROFILE_MODEL) -> None:
         self.api_key = api_key
-        self.model = GEMINI_PROFILE_MODEL
+        self.model = model
 
     def parse(self, raw_text: str, timezone_name: str) -> dict[str, Any]:
         genai_module, types_module = _get_genai_modules()
@@ -125,9 +131,11 @@ Rules:
         return _coerce_profile_output(raw_structured, raw_text=raw_text)
 
 
-def build_user_profile_preference_parser(api_key: str = "") -> UserProfilePreferenceParser:
+def build_user_profile_preference_parser(
+    api_key: str = "", model: str = GEMINI_PROFILE_MODEL
+) -> UserProfilePreferenceParser:
     if api_key:
-        return GeminiUserProfilePreferenceParser(api_key=api_key)
+        return GeminiUserProfilePreferenceParser(api_key=api_key, model=model)
     return StubUserProfilePreferenceParser()
 
 
