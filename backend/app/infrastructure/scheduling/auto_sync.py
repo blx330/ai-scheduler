@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -33,7 +33,7 @@ def sync_all_connections(
         connection_ids = list(
             db.scalars(select(CalendarConnection.user_id).where(CalendarConnection.status.in_(_SYNCABLE_STATUSES)))
         )
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         horizon_end = now + timedelta(days=horizon_days)
         service = GoogleCalendarService(db, settings, client)
         for user_id in connection_ids:

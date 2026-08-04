@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -22,19 +21,19 @@ class CalendarConnection(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     provider: Mapped[str] = mapped_column(String(32), nullable=False, default="google")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="scaffold")
-    access_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    refresh_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    token_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    scopes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    account_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scopes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    account_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     selected_busy_calendar_ids_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
-    selected_write_calendar_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    selected_write_calendar_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Window most recently covered by a successful busy sync. Without this, "has a
     # token" was treated as "we know this person's schedule", so a user who connected
     # Google but never synced was planned as free 24/7.
-    busy_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    busy_synced_start_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    busy_synced_end_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    busy_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    busy_synced_start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    busy_synced_end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
@@ -50,12 +49,12 @@ class CalendarBusyInterval(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    calendar_connection_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    calendar_connection_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
         ForeignKey("calendar_connections.id", ondelete="CASCADE"),
         nullable=True,
     )
-    external_event_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    external_event_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -12,7 +12,7 @@ ZONE = ZoneInfo(ORGANIZER_TZ)
 
 def _utc(hour: int, minute: int = 0, day: int = 10) -> datetime:
     """A wall-clock time in the organizer's timezone, as UTC."""
-    return datetime(2026, 6, day, hour, minute, tzinfo=ZONE).astimezone(timezone.utc)
+    return datetime(2026, 6, day, hour, minute, tzinfo=ZONE).astimezone(UTC)
 
 
 def _local_hhmm(value: datetime) -> str:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Optional, Union
 from uuid import UUID
 
 from app.domain.availability.models import Interval
@@ -15,7 +14,7 @@ class ParticipantContext:
     role: str
     timezone: str
     effective_availability: list[Interval]
-    preference: Optional[ParsedPreference] = None
+    preference: ParsedPreference | None = None
 
 
 @dataclass(frozen=True)
@@ -24,7 +23,7 @@ class ScheduleSlot:
     end_at: datetime
 
     @classmethod
-    def from_start(cls, start_at: datetime, duration_minutes: int) -> "ScheduleSlot":
+    def from_start(cls, start_at: datetime, duration_minutes: int) -> ScheduleSlot:
         return cls(start_at=start_at, end_at=start_at + timedelta(minutes=duration_minutes))
 
 
@@ -34,7 +33,7 @@ class ScheduleParticipantStatus:
     role: str
     available: bool
 
-    def model_dump(self, mode: str = "python") -> dict[str, Union[str, bool]]:
+    def model_dump(self, mode: str = "python") -> dict[str, str | bool]:
         return {"user_id": str(self.user_id) if mode == "json" else self.user_id, "role": self.role, "available": self.available}
 
 

@@ -10,7 +10,12 @@ from app.domain.common.time_of_day import (
     slot_minutes,
 )
 from app.domain.preferences.models import ParsedPreference, TimeRangePreference
-from app.domain.scheduling.models import ParticipantContext, ScheduleParticipantStatus, ScheduleResult, ScheduleSlot
+from app.domain.scheduling.models import (
+    ParticipantContext,
+    ScheduleParticipantStatus,
+    ScheduleResult,
+    ScheduleSlot,
+)
 
 OPTIONAL_ATTENDEE_SCORE = 1.5
 PREFERRED_WEEKDAY_SCORE = 0.75

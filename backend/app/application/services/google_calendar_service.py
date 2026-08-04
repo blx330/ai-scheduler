@@ -6,8 +6,7 @@ import hmac
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 from urllib.parse import urlencode
 from uuid import UUID
 
@@ -50,10 +49,10 @@ class GoogleConnectionStatus:
     user_id: UUID
     connected: bool
     status: str
-    account_email: Optional[str]
+    account_email: str | None
     selected_busy_calendar_ids: list[str]
-    selected_write_calendar_id: Optional[str]
-    token_expires_at: Optional[datetime]
+    selected_write_calendar_id: str | None
+    token_expires_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -141,7 +140,7 @@ class GoogleCalendarService:
         self,
         user_id: UUID,
         busy_calendar_ids: list[str],
-        write_calendar_id: Optional[str],
+        write_calendar_id: str | None,
     ) -> GoogleConnectionStatus:
         connection = self._require_connection(user_id)
         available_ids = {calendar.id for calendar in self.list_calendars(user_id)}
@@ -220,7 +219,7 @@ class GoogleCalendarService:
 
         # Record the window we actually have data for, extending any previously
         # synced window it touches, so planning can tell "free" from "unknown".
-        connection.busy_synced_at = datetime.now(timezone.utc)
+        connection.busy_synced_at = datetime.now(UTC)
         if (
             connection.busy_synced_start_at is not None
             and connection.busy_synced_end_at is not None
@@ -252,7 +251,7 @@ class GoogleCalendarService:
     def create_event_for_practice_session(
         self,
         practice_session_id: UUID,
-        calendar_id: Optional[str] = None,
+        calendar_id: str | None = None,
     ) -> GoogleCreatedEvent:
         practice_session = self.db.scalars(
             select(PracticeSession)
@@ -367,7 +366,7 @@ class GoogleCalendarService:
 
     def _ensure_access_token(self, connection: CalendarConnection) -> str:
         if connection.access_token and connection.token_expires_at:
-            if ensure_utc(connection.token_expires_at) > datetime.now(timezone.utc):
+            if ensure_utc(connection.token_expires_at) > datetime.now(UTC):
                 return connection.access_token
         if not connection.refresh_token:
             raise ValueError("Google Calendar connection is missing a refresh token")
@@ -380,7 +379,7 @@ class GoogleCalendarService:
         self.db.commit()
         return tokens.access_token
 
-    def _find_connection(self, user_id: UUID) -> Optional[CalendarConnection]:
+    def _find_connection(self, user_id: UUID) -> CalendarConnection | None:
         statement = (
             select(CalendarConnection)
             .where(CalendarConnection.user_id == user_id)
@@ -412,7 +411,7 @@ class GoogleCalendarService:
         raise ValueError(error_message)
 
 
-def _sign_state(payload: dict[str, str], secret: Optional[str]) -> str:
+def _sign_state(payload: dict[str, str], secret: str | None) -> str:
     if not secret:
         raise RuntimeError(
             "OAUTH_STATE_SECRET env var is not set. "
@@ -424,7 +423,7 @@ def _sign_state(payload: dict[str, str], secret: Optional[str]) -> str:
     return f"{encoded_payload}.{encoded_signature}"
 
 
-def _verify_state(token: str, secret: Optional[str]) -> dict[str, str]:
+def _verify_state(token: str, secret: str | None) -> dict[str, str]:
     if not secret:
         raise RuntimeError(
             "OAUTH_STATE_SECRET env var is not set. "
@@ -447,7 +446,7 @@ def _decode_base64(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + padding)
 
 
-def _has_any_scope(scopes: Optional[str], required_scopes: frozenset[str]) -> bool:
+def _has_any_scope(scopes: str | None, required_scopes: frozenset[str]) -> bool:
     if not scopes:
         return True  # Assume full grant if scope string absent (OAuth spec allows this)
     granted_scopes = {scope.strip() for scope in scopes.split() if scope.strip()}

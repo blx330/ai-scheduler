@@ -1,5 +1,4 @@
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from app.infrastructure.db.models import CalendarConnection, PracticeSession, Room
@@ -284,6 +283,46 @@ def test_confirmed_sessions_affect_future_planning_runs(client) -> None:
     )
     assert overview_response.status_code == 200
     assert overview_response.json()["practice_sessions"][0]["start_at"] == "2026-04-04T09:00:00Z"
+
+
+def test_confirming_a_session_updates_event_status_in_the_same_request(client) -> None:
+    # Regression test: confirm_results used to compute the post-confirm status from
+    # event.practice_sessions, a relationship eager-loaded earlier in the same call
+    # (before the new confirmation existed) -- so it always undercounted by exactly
+    # the session(s) just confirmed. For a 2-required event this meant the very first
+    # confirmation left status stuck at "unscheduled" instead of "partially_scheduled".
+    organizer = _create_user(client, "Coach Status", "coach-status@example.com")
+    dancer = _create_user(client, "Status Dancer", "status-dancer@example.com")
+    _add_availability(client, dancer["id"], "2026-04-04T09:00:00Z", "2026-04-04T12:00:00Z")
+
+    event = _create_event(
+        client,
+        name="Two Session Dance",
+        organizer_user_id=organizer["id"],
+        duration_minutes=60,
+        latest_schedule_at="2026-04-04T12:00:00Z",
+        required_session_count=2,
+        participants=[{"user_id": dancer["id"], "role": "required"}],
+    )
+    assert event["status"] == "unscheduled"
+
+    run = _create_planning_run(
+        client,
+        event_ids=[event["id"]],
+        horizon_start="2026-04-04T09:00:00Z",
+        horizon_end="2026-04-04T12:00:00Z",
+    ).json()
+    top_result_id = run["results"][0]["recommendations"][0]["id"]
+
+    confirm_response = client.post(
+        f"/api/v1/planning-runs/{run['id']}/confirm",
+        json={"result_ids": [top_result_id]},
+    )
+    assert confirm_response.status_code == 200
+
+    updated_event = client.get(f"/api/v1/events/{event['id']}").json()
+    assert updated_event["status"] == "partially_scheduled"
+    assert updated_event["confirmed_session_count"] == 1
 
 
 def test_planning_run_orders_by_score_descending_before_time_tiebreak(client) -> None:
@@ -756,7 +795,7 @@ def test_unschedule_practice_removes_google_event_and_clears_calendar(client, ap
                 status="configured",
                 access_token="live-token",
                 scopes="https://www.googleapis.com/auth/calendar",
-                token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                token_expires_at=datetime.now(UTC) + timedelta(hours=1),
                 selected_busy_calendar_ids_json=["primary"],
                 selected_write_calendar_id="primary",
             )
@@ -861,7 +900,7 @@ def test_unschedule_practice_still_succeeds_when_google_delete_fails(client, app
                 status="configured",
                 access_token="live-token",
                 scopes="https://www.googleapis.com/auth/calendar",
-                token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                token_expires_at=datetime.now(UTC) + timedelta(hours=1),
                 selected_busy_calendar_ids_json=["primary"],
                 selected_write_calendar_id="primary",
             )
@@ -936,7 +975,7 @@ def _grant_google_connection(app, user_id: str) -> None:
                 status="configured",
                 access_token="live-token",
                 scopes="https://www.googleapis.com/auth/calendar",
-                token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                token_expires_at=datetime.now(UTC) + timedelta(hours=1),
                 selected_busy_calendar_ids_json=["primary"],
                 selected_write_calendar_id="primary",
             )
@@ -1017,7 +1056,7 @@ def test_reschedule_moves_confirmed_session_and_updates_google_event(client, app
     assert body["google_event_updated"] is True
     assert body["warning"] is None
     assert fake_client.updated_events == [
-        ("primary", "practice_evt_reschedule", datetime(2026, 4, 12, 11, 0, tzinfo=timezone.utc), datetime(2026, 4, 12, 12, 0, tzinfo=timezone.utc))
+        ("primary", "practice_evt_reschedule", datetime(2026, 4, 12, 11, 0, tzinfo=UTC), datetime(2026, 4, 12, 12, 0, tzinfo=UTC))
     ]
 
 
@@ -1278,8 +1317,8 @@ def _create_user(
     client,
     display_name: str,
     email: str,
-    preferred_practice_time: Optional[str] = None,
-    preferred_practice_time_raw: Optional[str] = None,
+    preferred_practice_time: str | None = None,
+    preferred_practice_time_raw: str | None = None,
 ) -> dict:
     payload = {
         "display_name": display_name,
@@ -1315,7 +1354,7 @@ def _create_event(
     latest_schedule_at: str,
     required_session_count: int,
     participants: list[dict],
-    earliest_start_date: Optional[str] = None,
+    earliest_start_date: str | None = None,
     min_days_apart: int = 0,
 ) -> dict:
     response = client.post(
