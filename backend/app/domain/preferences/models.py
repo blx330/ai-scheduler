@@ -23,9 +23,10 @@ class TimeRangePreference(BaseModel):
 
 
 class PreferredPracticeTime(str, Enum):
-    EARLY_MORNING = "early_morning"
-    MID_MORNING = "mid_morning"
-    LATE_MORNING = "late_morning"
+    MORNING = "morning"
+    AFTERNOON = "afternoon"
+    EVENING = "evening"
+    LATE_NIGHT = "late_night"
 
 
 class CachedPracticePreference(BaseModel):
@@ -103,9 +104,10 @@ class ParsedPreference(BaseModel):
 
 def build_preferred_practice_time_range(preference: PreferredPracticeTime) -> TimeRangePreference:
     windows = {
-        PreferredPracticeTime.EARLY_MORNING: ("08:00", "09:00"),
-        PreferredPracticeTime.MID_MORNING: ("09:00", "11:00"),
-        PreferredPracticeTime.LATE_MORNING: ("11:00", "12:00"),
+        PreferredPracticeTime.MORNING: ("08:00", "12:00"),
+        PreferredPracticeTime.AFTERNOON: ("12:00", "16:00"),
+        PreferredPracticeTime.EVENING: ("16:00", "20:00"),
+        PreferredPracticeTime.LATE_NIGHT: ("20:00", "24:00"),
     }
     start_local, end_local = windows[preference]
     return TimeRangePreference(start_local=start_local, end_local=end_local, weight=1.0)
