@@ -1,3 +1,5 @@
+import { hashIndex } from "@/lib/hash";
+
 const PALETTE = [
   "#22c55e",
   "#3b82f6",
@@ -10,10 +12,5 @@ const PALETTE = [
 ];
 
 export function eventColor(id: string): string {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) {
-    hash = (hash * 31 + id.charCodeAt(i)) | 0;
-  }
-  const index = Math.abs(hash) % PALETTE.length;
-  return PALETTE[index];
+  return PALETTE[hashIndex(id, PALETTE.length)];
 }
