@@ -1,3 +1,5 @@
+import { hashIndex } from "@/lib/hash";
+
 const PASTEL_PALETTE = [
   "#bbf7d0", // pastel green
   "#bfdbfe", // pastel blue
@@ -13,16 +15,8 @@ const PASTEL_PALETTE = [
   "#fecdd3", // pastel rose
 ];
 
-function hashIndex(id: string): number {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) {
-    hash = (hash * 31 + id.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash) % PASTEL_PALETTE.length;
-}
-
 export function userColor(id: string): string {
-  return PASTEL_PALETTE[hashIndex(id)];
+  return PASTEL_PALETTE[hashIndex(id, PASTEL_PALETTE.length)];
 }
 
 /**
@@ -37,7 +31,7 @@ export function buildMemberColorMap(userIds: string[]): Map<string, string> {
   const map = new Map<string, string>();
 
   for (const id of sorted) {
-    let slot = hashIndex(id);
+    let slot = hashIndex(id, PASTEL_PALETTE.length);
     if (takenSlots.size < PASTEL_PALETTE.length) {
       while (takenSlots.has(slot)) {
         slot = (slot + 1) % PASTEL_PALETTE.length;
