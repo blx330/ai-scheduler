@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -13,9 +12,9 @@ from app.domain.preferences.models import PreferredPracticeTime
 class UserCreate(BaseModel):
     display_name: str
     timezone: str
-    email: Optional[str] = None
-    preferred_practice_time: Optional[PreferredPracticeTime] = None
-    preferred_practice_time_raw: Optional[str] = None
+    email: str | None = None
+    preferred_practice_time: PreferredPracticeTime | None = None
+    preferred_practice_time_raw: str | None = None
 
     @field_validator("timezone")
     @classmethod
@@ -28,8 +27,8 @@ class UserCreate(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    preferred_practice_time: Optional[PreferredPracticeTime] = None
-    preferred_practice_time_raw: Optional[str] = None
+    preferred_practice_time: PreferredPracticeTime | None = None
+    preferred_practice_time_raw: str | None = None
 
 
 class UserRead(BaseModel):
@@ -38,9 +37,9 @@ class UserRead(BaseModel):
     id: UUID
     display_name: str
     timezone: str
-    email: Optional[str]
-    preferred_practice_time: Optional[PreferredPracticeTime]
-    preferred_practice_time_raw: Optional[str]
-    preferred_practice_time_parsed: Optional[dict]
-    preferred_practice_time_summary: Optional[str]
+    email: str | None
+    preferred_practice_time: PreferredPracticeTime | None
+    preferred_practice_time_raw: str | None
+    preferred_practice_time_parsed: dict | None
+    preferred_practice_time_summary: str | None
     created_at: datetime

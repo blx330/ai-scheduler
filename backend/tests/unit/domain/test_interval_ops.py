@@ -1,11 +1,11 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.domain.availability.interval_ops import interval_covered, merge_intervals, subtract_intervals
 from app.domain.availability.models import Interval
 
 
 def dt(hour: int, minute: int = 0) -> datetime:
-    return datetime(2026, 3, 23, hour, minute, tzinfo=timezone.utc)
+    return datetime(2026, 3, 23, hour, minute, tzinfo=UTC)
 
 
 def test_merge_intervals_merges_adjacent_and_overlapping() -> None:

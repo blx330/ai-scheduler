@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, field_validator
@@ -20,22 +19,22 @@ class GoogleCalendarSummaryRead(BaseModel):
     summary: str
     primary: bool
     access_role: str
-    time_zone: Optional[str] = None
+    time_zone: str | None = None
 
 
 class GoogleCalendarConnectionRead(BaseModel):
     user_id: UUID
     connected: bool
     status: str
-    account_email: Optional[str] = None
+    account_email: str | None = None
     selected_busy_calendar_ids: list[str]
-    selected_write_calendar_id: Optional[str] = None
-    token_expires_at: Optional[datetime] = None
+    selected_write_calendar_id: str | None = None
+    token_expires_at: datetime | None = None
 
 
 class GoogleCalendarSelectionUpdate(BaseModel):
     busy_calendar_ids: list[str]
-    write_calendar_id: Optional[str] = None
+    write_calendar_id: str | None = None
 
 
 class GoogleBusySyncRequest(BaseModel):
