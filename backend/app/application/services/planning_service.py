@@ -31,6 +31,7 @@ from app.infrastructure.db.models import (
     CalendarBusyInterval,
     CalendarConnection,
     DanceEvent,
+    ManualAvailabilityInterval,
     PlanningRun,
     PlanningRunResult,
     PracticeSession,
@@ -540,10 +541,6 @@ class PlanningService:
             )
 
         manual_by_user = defaultdict(list)
-        from app.infrastructure.db.models import (
-            ManualAvailabilityInterval,  # local import to avoid circular lint noise
-        )
-
         for interval in self.db.scalars(
             select(ManualAvailabilityInterval)
             .where(ManualAvailabilityInterval.user_id.in_(participant_user_ids))
