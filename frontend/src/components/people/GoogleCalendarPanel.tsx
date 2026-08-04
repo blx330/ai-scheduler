@@ -20,10 +20,12 @@ import {
   useStartGoogleAuth,
   useSyncBusyTime,
 } from "@/hooks/use-google-calendar";
+import { useHealth } from "@/hooks/use-health";
 import type { UserRead } from "@/api/types";
 
 export function GoogleCalendarPanel({ user }: { user: UserRead }) {
   const { data: connection, isLoading } = useGoogleConnection(user.id);
+  const { data: health } = useHealth();
   const startAuth = useStartGoogleAuth();
   const syncBusy = useSyncBusyTime(user.id);
   const selectCalendars = useSelectGoogleCalendars(user.id);
@@ -74,9 +76,18 @@ export function GoogleCalendarPanel({ user }: { user: UserRead }) {
         {isLoading && <p className="text-sm text-muted-foreground">Checking connection...</p>}
 
         {!isLoading && !connection?.connected && (
-          <Button onClick={() => startAuth.mutate(user.id)} disabled={startAuth.isPending}>
-            <CalendarPlus /> Connect Google Calendar
-          </Button>
+          <div className="space-y-2">
+            <Button onClick={() => startAuth.mutate(user.id)} disabled={startAuth.isPending}>
+              <CalendarPlus /> Connect Google Calendar
+            </Button>
+            {health?.demo_mode && (
+              <p className="text-xs text-muted-foreground max-w-md">
+                Optional &mdash; uses your real Google account. Since this is an unverified personal project,
+                Google shows a warning screen first. Feel free to skip this and explore with the pre-seeded
+                demo data instead.
+              </p>
+            )}
+          </div>
         )}
 
         {connection?.connected && (
