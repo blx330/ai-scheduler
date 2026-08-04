@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:8000"
     oauth_state_secret: str | None = Field(default=None, validation_alias="OAUTH_STATE_SECRET")
     gemini_api_key: str = Field(default="", validation_alias="GEMINI_API_KEY")
+    gemini_model: str = Field(default="gemini-3.6-flash", validation_alias="GEMINI_MODEL")
     google_client_id: str | None = Field(default=None, validation_alias="GOOGLE_CLIENT_ID")
     google_client_secret: str | None = Field(default=None, validation_alias="GOOGLE_CLIENT_SECRET")
     google_redirect_uri: str | None = Field(default=None, validation_alias="GOOGLE_REDIRECT_URI")
