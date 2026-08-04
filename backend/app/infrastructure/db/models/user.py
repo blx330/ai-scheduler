@@ -50,9 +50,10 @@ class User(Base):
             return "Could not parse preferences — raw text saved, defaults will be used."
         if self.preferred_practice_time:
             label = {
-                PreferredPracticeTime.EARLY_MORNING.value: "early morning (8-9 AM)",
-                PreferredPracticeTime.MID_MORNING.value: "mid-morning (9-11 AM)",
-                PreferredPracticeTime.LATE_MORNING.value: "late morning (11 AM-12 PM)",
+                PreferredPracticeTime.MORNING.value: "morning (8 AM-12 PM)",
+                PreferredPracticeTime.AFTERNOON.value: "afternoon (12-4 PM)",
+                PreferredPracticeTime.EVENING.value: "evening (4-8 PM)",
+                PreferredPracticeTime.LATE_NIGHT.value: "late night (8 PM-12 AM)",
             }.get(self.preferred_practice_time)
             if label:
                 return f"Understood: prefers {label}"

@@ -1,4 +1,4 @@
-export type PreferredPracticeTime = "early_morning" | "mid_morning" | "late_morning";
+export type PreferredPracticeTime = "morning" | "afternoon" | "evening" | "late_night";
 
 export interface CachedPracticePreference {
   preferred_days: string[];

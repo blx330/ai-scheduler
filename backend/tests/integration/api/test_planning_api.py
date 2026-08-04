@@ -330,7 +330,7 @@ def test_planning_run_orders_by_score_descending_before_time_tiebreak(client) ->
         client,
         "Coach Evening Rank",
         "coach-evening-rank@example.com",
-        preferred_practice_time="late_morning",
+        preferred_practice_time="afternoon",
     )
     dancer = _create_user(client, "Evening Rank Dancer", "evening-rank-dancer@example.com")
     _add_availability(client, dancer["id"], "2026-04-05T08:00:00Z", "2026-04-05T23:00:00Z")
@@ -366,17 +366,17 @@ def test_planning_run_uses_saved_preferred_practice_time_for_scoring(client) -> 
         client,
         "Coach Preference",
         "coach-preference@example.com",
-        preferred_practice_time="mid_morning",
+        preferred_practice_time="evening",
     )
     dancer = _create_user(client, "Preference Dancer", "preference-dancer@example.com")
-    _add_availability(client, dancer["id"], "2026-04-06T08:00:00Z", "2026-04-06T12:00:00Z")
+    _add_availability(client, dancer["id"], "2026-04-06T15:00:00Z", "2026-04-06T18:00:00Z")
 
     event = _create_event(
         client,
         name="Preference Dance",
         organizer_user_id=organizer["id"],
         duration_minutes=60,
-        latest_schedule_at="2026-04-06T12:00:00Z",
+        latest_schedule_at="2026-04-06T18:00:00Z",
         required_session_count=1,
         participants=[{"user_id": dancer["id"], "role": "required"}],
     )
@@ -384,14 +384,14 @@ def test_planning_run_uses_saved_preferred_practice_time_for_scoring(client) -> 
     response = _create_planning_run(
         client,
         event_ids=[event["id"]],
-        horizon_start="2026-04-06T08:00:00Z",
-        horizon_end="2026-04-06T12:00:00Z",
+        horizon_start="2026-04-06T15:00:00Z",
+        horizon_end="2026-04-06T18:00:00Z",
     )
 
     assert response.status_code == 200
     recommendations = response.json()["results"][0]["recommendations"]
-    earliest_slot = next(item for item in recommendations if item["start_at"] == "2026-04-06T08:00:00Z")
-    preferred_slot = next(item for item in recommendations if item["start_at"] == "2026-04-06T09:00:00Z")
+    earliest_slot = next(item for item in recommendations if item["start_at"] == "2026-04-06T15:00:00Z")
+    preferred_slot = next(item for item in recommendations if item["start_at"] == "2026-04-06T16:00:00Z")
     assert earliest_slot["score_breakdown"]["organizer_preference_bonus"] == 0.0
     assert preferred_slot["score_breakdown"]["organizer_preference_bonus"] == 1.0
     assert any(

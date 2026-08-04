@@ -44,19 +44,19 @@ DEMO_MEMBERS = [
         "display_name": "Alice Kim",
         "timezone": "America/New_York",
         "email": "alice@demo.aischeduler.dev",
-        "preferred_practice_time": PreferredPracticeTime.MID_MORNING,
+        "preferred_practice_time": PreferredPracticeTime.MORNING,
     },
     {
         "display_name": "Bilal Osei",
         "timezone": "America/Chicago",
         "email": "bilal@demo.aischeduler.dev",
-        "preferred_practice_time": PreferredPracticeTime.EARLY_MORNING,
+        "preferred_practice_time": PreferredPracticeTime.AFTERNOON,
     },
     {
         "display_name": "Carmen Ruiz",
         "timezone": "America/Los_Angeles",
         "email": "carmen@demo.aischeduler.dev",
-        "preferred_practice_time": PreferredPracticeTime.LATE_MORNING,
+        "preferred_practice_time": PreferredPracticeTime.EVENING,
     },
     {
         "display_name": "Dev Patel",

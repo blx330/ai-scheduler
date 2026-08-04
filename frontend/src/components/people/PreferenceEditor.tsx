@@ -13,9 +13,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { PreferredPracticeTime } from "@/api/types";
 
 export const PREFERRED_PRACTICE_TIME_OPTIONS: { value: PreferredPracticeTime; label: string }[] = [
-  { value: "early_morning", label: "Early morning (8:00 - 9:00)" },
-  { value: "mid_morning", label: "Mid morning (9:00 - 11:00)" },
-  { value: "late_morning", label: "Late morning (11:00 - 12:00)" },
+  { value: "morning", label: "Morning (8:00 - 12:00)" },
+  { value: "afternoon", label: "Afternoon (12:00 - 16:00)" },
+  { value: "evening", label: "Evening (16:00 - 20:00)" },
+  { value: "late_night", label: "Late night (20:00 - 24:00)" },
 ];
 
 export interface PreferenceValue {

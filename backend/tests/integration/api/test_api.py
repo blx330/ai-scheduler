@@ -34,25 +34,25 @@ def test_user_profile_can_store_preferred_practice_time(client) -> None:
             "display_name": "Profile User",
             "timezone": "UTC",
             "email": "profile-user@example.com",
-            "preferred_practice_time": "mid_morning",
+            "preferred_practice_time": "morning",
         },
     )
 
     assert create_response.status_code == 201
     user = create_response.json()
-    assert user["preferred_practice_time"] == "mid_morning"
+    assert user["preferred_practice_time"] == "morning"
 
     update_response = client.patch(
         f"/api/v1/users/{user['id']}",
-        json={"preferred_practice_time": "late_morning"},
+        json={"preferred_practice_time": "afternoon"},
     )
 
     assert update_response.status_code == 200
-    assert update_response.json()["preferred_practice_time"] == "late_morning"
+    assert update_response.json()["preferred_practice_time"] == "afternoon"
 
     read_response = client.get(f"/api/v1/users/{user['id']}")
     assert read_response.status_code == 200
-    assert read_response.json()["preferred_practice_time"] == "late_morning"
+    assert read_response.json()["preferred_practice_time"] == "afternoon"
 
 
 def test_saving_a_preset_alongside_a_null_raw_preference_keeps_the_preset(client) -> None:
@@ -69,16 +69,16 @@ def test_saving_a_preset_alongside_a_null_raw_preference_keeps_the_preset(client
 
     update_response = client.patch(
         f"/api/v1/users/{user['id']}",
-        json={"preferred_practice_time": "mid_morning", "preferred_practice_time_raw": None},
+        json={"preferred_practice_time": "morning", "preferred_practice_time_raw": None},
     )
 
     assert update_response.status_code == 200
-    assert update_response.json()["preferred_practice_time"] == "mid_morning"
+    assert update_response.json()["preferred_practice_time"] == "morning"
     assert update_response.json()["preferred_practice_time_raw"] is None
 
     # and it must survive a round trip, not just the response body
     read_response = client.get(f"/api/v1/users/{user['id']}")
-    assert read_response.json()["preferred_practice_time"] == "mid_morning"
+    assert read_response.json()["preferred_practice_time"] == "morning"
 
 
 def test_free_text_preference_still_supersedes_a_preset(client) -> None:
@@ -88,7 +88,7 @@ def test_free_text_preference_still_supersedes_a_preset(client) -> None:
             "display_name": "Freeform Wins",
             "timezone": "UTC",
             "email": "freeform-wins@example.com",
-            "preferred_practice_time": "mid_morning",
+            "preferred_practice_time": "morning",
         },
     ).json()
 
