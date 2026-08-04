@@ -5,11 +5,10 @@ import contextlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from app.api.routers import admin, availability, events, google_calendar, health, planning, practices, users
@@ -26,6 +25,7 @@ def create_app(
     session_factory=None,
     user_profile_preference_parser=None,
     google_calendar_client=None,
+    static_dir: Path | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings()
     session_factory = session_factory or build_session_factory(app_settings.database_url)
@@ -98,9 +98,28 @@ def create_app(
     app.include_router(google_calendar.router, prefix=app_settings.api_prefix)
     app.include_router(admin.router, prefix=app_settings.api_prefix)
 
-    static_dir = Path(__file__).resolve().parent / "static"
+    static_dir = static_dir or Path(__file__).resolve().parent / "static"
     if static_dir.exists():
-        app.mount("/", StaticFiles(directory=static_dir, html=True), name="demo")
+        index_path = static_dir / "index.html"
+
+        api_prefix = app_settings.api_prefix.strip("/")
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def serve_spa(full_path: str) -> FileResponse:
+            # React Router routes (e.g. /calendar, /members/<id>) have no matching file
+            # on disk -- StaticFiles(html=True) 404s on those instead of falling back to
+            # index.html, so a direct visit or refresh on any route but "/" 404'd with a
+            # bare JSON error instead of loading the app. Serve the real static asset
+            # when the path matches one (JS/CSS/favicon/etc.), otherwise hand back
+            # index.html and let the client-side router take over. Unmatched API paths
+            # must stay real 404s, not silently become this catch-all's HTML response.
+            if full_path == api_prefix or full_path.startswith(f"{api_prefix}/"):
+                raise HTTPException(status_code=404, detail="Not Found")
+            candidate = (static_dir / full_path).resolve()
+            if candidate.is_file() and candidate.is_relative_to(static_dir):
+                return FileResponse(candidate)
+            return FileResponse(index_path)
+
     return app
 
 
