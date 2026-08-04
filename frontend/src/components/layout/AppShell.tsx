@@ -13,7 +13,7 @@ const NAV_ITEMS = [
 
 export function AppShell({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-svh flex flex-col bg-background">
+    <div className="h-svh flex flex-col bg-background">
       <DemoModeBanner />
       <div className="flex-1 flex flex-col md:flex-row min-h-0">
         <aside className="md:w-64 shrink-0 border-b md:border-b-0 md:border-r border-black/5">
@@ -41,7 +41,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             ))}
           </nav>
         </aside>
-        <main className="flex-1 min-w-0 p-6 md:p-8 pb-14 flex flex-col">{children}</main>
+        <main className="flex-1 min-w-0 min-h-0 overflow-y-auto p-6 md:p-8 pb-14 flex flex-col">{children}</main>
       </div>
     </div>
   );

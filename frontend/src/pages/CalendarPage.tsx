@@ -25,7 +25,7 @@ import type {
   RescheduleConflictDetail,
 } from "@/api/types";
 
-const DAY_START_MIN = 7 * 60;
+const DAY_START_MIN = 0;
 const DAY_END_MIN = 24 * 60;
 const PX_PER_MIN = 72 / 60;
 const NUM_HOURS = (DAY_END_MIN - DAY_START_MIN) / 60;
@@ -59,8 +59,10 @@ function planningHorizonStart(weekStart: Date): Date {
 
 function fmtHourLabel(mins: number): string {
   const h = Math.floor(mins / 60) % 24;
+  const m = mins % 60;
   const hh = h % 12 === 0 ? 12 : h % 12;
-  return `${hh} ${h < 12 ? "AM" : "PM"}`;
+  const period = h < 12 ? "AM" : "PM";
+  return m === 0 ? `${hh} ${period}` : `${hh}:${String(m).padStart(2, "0")} ${period}`;
 }
 
 function formatTimeRange(startIso: string, endIso: string): string {
@@ -111,6 +113,7 @@ export function CalendarPage() {
   const [pendingReschedule, setPendingReschedule] = useState<PendingReschedule | null>(null);
 
   const gridRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const detachDragRef = useRef<(() => void) | null>(null);
 
   // Navigating away mid-drag would otherwise leave both window listeners attached and
@@ -167,6 +170,12 @@ export function CalendarPage() {
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
   const dayDateStrings = useMemo(() => days.map((d) => format(d, "yyyy-MM-dd")), [days]);
 
+  // Opening on midnight would bury working hours below a wall of empty night
+  // rows, so scroll to ~7 AM by default the way Google Calendar does.
+  useEffect(() => {
+    scrollContainerRef.current?.scrollTo({ top: 7 * 60 * PX_PER_MIN });
+  }, [weekStart]);
+
   // Busy time only for members toggled visible in the Members panel -- that panel
   // is the sole control over whose calendar is fetched/shown, independent of which
   // dances are checked.
@@ -197,7 +206,8 @@ export function CalendarPage() {
     if (Number.isNaN(instant.getTime())) return null;
     const day = dayDateStrings.indexOf(format(instant, "yyyy-MM-dd"));
     if (day === -1) return null;
-    return { day, startMin: instant.getHours() * 60 + instant.getMinutes() };
+    const startMin = Math.max(DAY_START_MIN, Math.min(DAY_END_MIN - 1, instant.getHours() * 60 + instant.getMinutes()));
+    return { day, startMin };
   }
 
   function blockTooltip(rec: PlanningRecommendationRead): string {
@@ -445,7 +455,7 @@ export function CalendarPage() {
         durationMin,
         color: eventColor(group.dance_event_id),
         label: `${group.dance_name} (suggested)`,
-        timeLabel: `${fmtHourLabel(placement.startMin).replace(" ", "")}`,
+        timeLabel: fmtHourLabel(placement.startMin),
         isFallback: rec.is_fallback,
         tooltip: blockTooltip(rec),
         group,
@@ -671,150 +681,152 @@ export function CalendarPage() {
           </div>
         )}
 
-        <Card className="flex-1 min-w-0 overflow-x-auto p-0">
-          <div className="min-w-[900px]">
-            <div className="grid" style={{ gridTemplateColumns: "64px repeat(7,1fr)" }}>
-              <div />
-              {days.map((day) => (
-                <div key={day.toISOString()} className="text-center py-3 border-l border-black/[0.06]">
-                  <div className="text-xs text-muted-foreground">{format(day, "EEE")}</div>
-                  <div className="text-base font-bold mt-0.5">{format(day, "d")}</div>
-                </div>
-              ))}
-            </div>
-
-            <div className="relative grid border-t border-black/[0.06]" style={{ gridTemplateColumns: "64px 1fr" }}>
-              <div>
-                {hourLabels.map((label, i) => (
-                  <div key={i} style={{ height: 72 }} className="text-right pr-2.5 text-xs text-muted-foreground -translate-y-1.5">
-                    {label}
+        <Card className="flex-1 min-w-0 self-stretch flex flex-col min-h-0 overflow-hidden p-0">
+          <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-auto">
+            <div className="min-w-[900px]">
+              <div className="sticky top-0 z-10 bg-card grid" style={{ gridTemplateColumns: "64px repeat(7,1fr)" }}>
+                <div />
+                {days.map((day) => (
+                  <div key={day.toISOString()} className="text-center py-3 border-l border-black/[0.06]">
+                    <div className="text-xs text-muted-foreground">{format(day, "EEE")}</div>
+                    <div className="text-base font-bold mt-0.5">{format(day, "d")}</div>
                   </div>
                 ))}
               </div>
 
-              <div
-                ref={gridRef}
-                className="relative"
-                style={{
-                  height: NUM_HOURS * 72,
-                  backgroundImage:
-                    "repeating-linear-gradient(to bottom, rgba(0,0,0,0.06) 0, rgba(0,0,0,0.06) 1px, transparent 1px, transparent 72px), repeating-linear-gradient(to right, rgba(0,0,0,0.06) 0, rgba(0,0,0,0.06) 1px, transparent 1px, transparent calc(100% / 7))",
-                }}
-              >
-                {/* Google-derived busy time, drawn under the practice blocks so the
-                    grid can show why a slot was not offered. */}
-                {busyBlocks.map((block) => {
-                  const top = (block.startMin - DAY_START_MIN) * PX_PER_MIN;
-                  const height = block.durationMin * PX_PER_MIN;
-                  const dayWidthPct = 100 / 7;
-                  const laneWidthPct = dayWidthPct / block.laneCount;
-                  const left = block.day * dayWidthPct + block.lane * laneWidthPct;
-                  return (
-                    <div
-                      key={block.key}
-                      title={block.label}
-                      style={{
-                        position: "absolute",
-                        top,
-                        height,
-                        left: `calc(${left}% + 3px)`,
-                        width: `calc(${laneWidthPct}% - 6px)`,
-                        borderRadius: 6,
-                        border: `1px solid ${block.color}`,
-                        borderLeft: `3px solid ${block.color}`,
-                        background: `${block.color}33`,
-                        boxSizing: "border-box",
-                        overflow: "hidden",
-                        pointerEvents: "none",
-                      }}
-                    >
-                      {height >= 20 && (
-                        <div className="text-[9px] font-semibold truncate px-1 pt-0.5" style={{ color: "#1f2937" }}>
-                          {block.label}
-                        </div>
-                      )}
+              <div className="relative grid border-t border-black/[0.06]" style={{ gridTemplateColumns: "64px 1fr" }}>
+                <div>
+                  {hourLabels.map((label, i) => (
+                    <div key={i} style={{ height: 72 }} className="text-right pr-2.5 text-xs text-muted-foreground -translate-y-1.5">
+                      {label}
                     </div>
-                  );
-                })}
+                  ))}
+                </div>
 
-                {confirmedBlocks.map((block) => {
-                  const top = (block.startMin - DAY_START_MIN) * PX_PER_MIN;
-                  const height = block.durationMin * PX_PER_MIN;
-                  const widthPct = 100 / 7;
-                  return (
-                    <div
-                      key={block.key}
-                      onMouseDown={
-                        editMode
-                          ? (e) => startConfirmedDrag(e, block.session, block.day, block.startMin, block.durationMin)
-                          : undefined
-                      }
-                      style={{
-                        position: "absolute",
-                        top,
-                        height,
-                        left: `calc(${block.day * widthPct}% + 3px)`,
-                        width: `calc(${widthPct}% - 6px)`,
-                        background: block.color,
-                        color: "#fff",
-                        borderRadius: 8,
-                        padding: "8px 10px",
-                        boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
-                        overflow: "hidden",
-                        boxSizing: "border-box",
-                        cursor: editMode ? "grab" : "default",
-                        outline: editMode ? "2px dashed rgba(255,255,255,0.7)" : "none",
-                        outlineOffset: -4,
-                        userSelect: editMode ? "none" : undefined,
-                      }}
-                    >
-                      <div className="text-xs font-bold truncate">{block.label}</div>
-                      <div className="text-[11px] opacity-80 mt-0.5">{block.timeLabel}</div>
-                    </div>
-                  );
-                })}
-
-                {suggestedBlocks.map((block) => {
-                  const top = (block.startMin - DAY_START_MIN) * PX_PER_MIN;
-                  const height = block.durationMin * PX_PER_MIN;
-                  const widthPct = 100 / 7;
-                  return (
-                    <div
-                      key={block.key}
-                      title={block.tooltip}
-                      onMouseDown={(e) => startDrag(e, block.group, block.rec, block.day, block.startMin, block.durationMin)}
-                      style={{
-                        position: "absolute",
-                        top,
-                        height,
-                        left: `calc(${block.day * widthPct}% + 3px)`,
-                        width: `calc(${widthPct}% - 6px)`,
-                        background: "transparent",
-                        border: `2px dashed ${block.isFallback ? "#dc2626" : block.color}`,
-                        color: block.isFallback ? "#dc2626" : block.color,
-                        borderRadius: 8,
-                        padding: "8px 10px",
-                        cursor: "grab",
-                        userSelect: "none",
-                        overflow: "hidden",
-                        boxSizing: "border-box",
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onClick={() => setDismissedResultIds((prev) => new Set(prev).add(block.rec.id!))}
-                        className="absolute top-1 right-1 opacity-60 hover:opacity-100"
-                        title="Dismiss suggestion"
+                <div
+                  ref={gridRef}
+                  className="relative"
+                  style={{
+                    height: NUM_HOURS * 72,
+                    backgroundImage:
+                      "repeating-linear-gradient(to bottom, rgba(0,0,0,0.06) 0, rgba(0,0,0,0.06) 1px, transparent 1px, transparent 72px), repeating-linear-gradient(to right, rgba(0,0,0,0.06) 0, rgba(0,0,0,0.06) 1px, transparent 1px, transparent calc(100% / 7))",
+                  }}
+                >
+                  {/* Google-derived busy time, drawn under the practice blocks so the
+                      grid can show why a slot was not offered. */}
+                  {busyBlocks.map((block) => {
+                    const top = (block.startMin - DAY_START_MIN) * PX_PER_MIN;
+                    const height = block.durationMin * PX_PER_MIN;
+                    const dayWidthPct = 100 / 7;
+                    const laneWidthPct = dayWidthPct / block.laneCount;
+                    const left = block.day * dayWidthPct + block.lane * laneWidthPct;
+                    return (
+                      <div
+                        key={block.key}
+                        title={block.label}
+                        style={{
+                          position: "absolute",
+                          top,
+                          height,
+                          left: `calc(${left}% + 3px)`,
+                          width: `calc(${laneWidthPct}% - 6px)`,
+                          borderRadius: 6,
+                          border: `1px solid ${block.color}`,
+                          borderLeft: `3px solid ${block.color}`,
+                          background: `${block.color}33`,
+                          boxSizing: "border-box",
+                          overflow: "hidden",
+                          pointerEvents: "none",
+                        }}
                       >
-                        <X className="size-3" />
-                      </button>
-                      <div className="text-xs font-bold truncate pr-3">{block.label}</div>
-                      <div className="text-[11px] opacity-80 mt-0.5">{block.timeLabel}</div>
-                      {block.isFallback && <div className="text-[10px] font-semibold mt-0.5">missing required</div>}
-                    </div>
-                  );
-                })}
+                        {height >= 20 && (
+                          <div className="text-[9px] font-semibold truncate px-1 pt-0.5" style={{ color: "#1f2937" }}>
+                            {block.label}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  {confirmedBlocks.map((block) => {
+                    const top = (block.startMin - DAY_START_MIN) * PX_PER_MIN;
+                    const height = block.durationMin * PX_PER_MIN;
+                    const widthPct = 100 / 7;
+                    return (
+                      <div
+                        key={block.key}
+                        onMouseDown={
+                          editMode
+                            ? (e) => startConfirmedDrag(e, block.session, block.day, block.startMin, block.durationMin)
+                            : undefined
+                        }
+                        style={{
+                          position: "absolute",
+                          top,
+                          height,
+                          left: `calc(${block.day * widthPct}% + 3px)`,
+                          width: `calc(${widthPct}% - 6px)`,
+                          background: block.color,
+                          color: "#fff",
+                          borderRadius: 8,
+                          padding: "8px 10px",
+                          boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
+                          overflow: "hidden",
+                          boxSizing: "border-box",
+                          cursor: editMode ? "grab" : "default",
+                          outline: editMode ? "2px dashed rgba(255,255,255,0.7)" : "none",
+                          outlineOffset: -4,
+                          userSelect: editMode ? "none" : undefined,
+                        }}
+                      >
+                        <div className="text-xs font-bold truncate">{block.label}</div>
+                        <div className="text-[11px] opacity-80 mt-0.5">{block.timeLabel}</div>
+                      </div>
+                    );
+                  })}
+
+                  {suggestedBlocks.map((block) => {
+                    const top = (block.startMin - DAY_START_MIN) * PX_PER_MIN;
+                    const height = block.durationMin * PX_PER_MIN;
+                    const widthPct = 100 / 7;
+                    return (
+                      <div
+                        key={block.key}
+                        title={block.tooltip}
+                        onMouseDown={(e) => startDrag(e, block.group, block.rec, block.day, block.startMin, block.durationMin)}
+                        style={{
+                          position: "absolute",
+                          top,
+                          height,
+                          left: `calc(${block.day * widthPct}% + 3px)`,
+                          width: `calc(${widthPct}% - 6px)`,
+                          background: "transparent",
+                          border: `2px dashed ${block.isFallback ? "#dc2626" : block.color}`,
+                          color: block.isFallback ? "#dc2626" : block.color,
+                          borderRadius: 8,
+                          padding: "8px 10px",
+                          cursor: "grab",
+                          userSelect: "none",
+                          overflow: "hidden",
+                          boxSizing: "border-box",
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={() => setDismissedResultIds((prev) => new Set(prev).add(block.rec.id!))}
+                          className="absolute top-1 right-1 opacity-60 hover:opacity-100"
+                          title="Dismiss suggestion"
+                        >
+                          <X className="size-3" />
+                        </button>
+                        <div className="text-xs font-bold truncate pr-3">{block.label}</div>
+                        <div className="text-[11px] opacity-80 mt-0.5">{block.timeLabel}</div>
+                        {block.isFallback && <div className="text-[10px] font-semibold mt-0.5">missing required</div>}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </div>
