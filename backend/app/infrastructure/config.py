@@ -1,4 +1,3 @@
-from typing import Optional
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,14 +16,17 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     database_url: str = DEFAULT_DATABASE_URL
     frontend_url: str = "http://localhost:8000"
-    oauth_state_secret: Optional[str] = Field(default=None, validation_alias="OAUTH_STATE_SECRET")
+    oauth_state_secret: str | None = Field(default=None, validation_alias="OAUTH_STATE_SECRET")
     gemini_api_key: str = Field(default="", validation_alias="GEMINI_API_KEY")
-    google_client_id: Optional[str] = Field(default=None, validation_alias="GOOGLE_CLIENT_ID")
-    google_client_secret: Optional[str] = Field(default=None, validation_alias="GOOGLE_CLIENT_SECRET")
-    google_redirect_uri: Optional[str] = Field(default=None, validation_alias="GOOGLE_REDIRECT_URI")
+    google_client_id: str | None = Field(default=None, validation_alias="GOOGLE_CLIENT_ID")
+    google_client_secret: str | None = Field(default=None, validation_alias="GOOGLE_CLIENT_SECRET")
+    google_redirect_uri: str | None = Field(default=None, validation_alias="GOOGLE_REDIRECT_URI")
     auto_sync_enabled: bool = True
     auto_sync_interval_minutes: int = 15
     auto_sync_horizon_days: int = 30
+    # Gates POST /api/v1/admin/reset-demo. Left unset, that endpoint 404s -- it only
+    # exists at all once a deployment explicitly opts into being a public shared demo.
+    admin_reset_token: str = Field(default="", validation_alias="ADMIN_RESET_TOKEN")
 
     @field_validator("database_url", mode="before")
     @classmethod

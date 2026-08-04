@@ -1,0 +1,28 @@
+name: Reset public demo
+
+on:
+  schedule:
+    # Every 4 hours. Bounds how messy the shared, unauthenticated public demo can
+    # get between resets (see backend/app/infrastructure/demo_guard.py and
+    # backend/app/api/routers/admin.py).
+    - cron: "0 */4 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call reset-demo endpoint
+        run: |
+          if [ -z "${{ secrets.DEMO_URL }}" ] || [ -z "${{ secrets.ADMIN_RESET_TOKEN }}" ]; then
+            echo "DEMO_URL or ADMIN_RESET_TOKEN repo secret not set -- skipping (no demo deployed yet)."
+            exit 0
+          fi
+          status=$(curl -s -o /tmp/response.txt -w "%{http_code}" -X POST \
+            "${{ secrets.DEMO_URL }}/api/v1/admin/reset-demo" \
+            -H "X-Admin-Token: ${{ secrets.ADMIN_RESET_TOKEN }}")
+          cat /tmp/response.txt
+          if [ "$status" -ne 200 ]; then
+            echo "Reset failed with status $status"
+            exit 1
+          fi
