@@ -18,4 +18,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY backend /app
 COPY --from=frontend-build /frontend/dist /app/app/static
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Shell form (not exec-form JSON) so $PORT actually expands -- hosts like Render
+# assign their own port via this env var and expect the app to bind to it; falls
+# back to 8000 for docker-compose / anywhere PORT isn't set.
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
