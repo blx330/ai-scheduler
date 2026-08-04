@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/blx330/ai-scheduler/actions/workflows/ci.yml/badge.svg)](https://github.com/blx330/ai-scheduler/actions/workflows/ci.yml)
 
+**[Live demo →](https://ai-scheduler-6pas.onrender.com)** — a real deterministic scheduling engine with real Google Calendar sync, seeded with sample data so there's nothing to set up. It's a public shared demo (see [below](#public-demo)) and hosted on a free tier, so the first load can take up to a minute to wake up.
+
 I built this as a backend-first scheduling project to practice real scheduling logic, not just CRUD.
 
 At a high level, it does three things:
@@ -10,6 +12,8 @@ At a high level, it does three things:
 - generates and ranks feasible practice slots with deterministic scoring
 
 The API is served by FastAPI (`backend/`). The UI is a React SPA (`frontend/`) that talks to the API over `/api/v1`. In production/Docker, the built React assets are bundled into the FastAPI image and served from the same process and port — see [Build & deploy](#run-with-docker-single-command-deploy).
+
+![Calendar view: week grid with per-dance session blocks, a proposed candidate slot, and a per-member busy-time overlay](docs/screenshots/calendar.png)
 
 ## What the project does right now
 
@@ -30,6 +34,8 @@ Scheduling behavior in this codebase:
 - 12:00 AM -> 8:00 AM is a hard forbidden window
 - ranking is deterministic (score, then tie-breakers)
 
+![Event editor: duration, deadline, spacing constraints, and per-participant required/optional roles](docs/screenshots/event-editor.png)
+
 ## Code structure (actual repo layout)
 
 ### Root
@@ -40,15 +46,16 @@ Scheduling behavior in this codebase:
 - `PROJECT_SNAPSHOT_2026-04-10.md` - project snapshot notes
 
 ### Backend app
-- `backend/app/main.py` - app bootstrap, dependency wiring, router registration, static frontend mount
+- `backend/app/main.py` - app bootstrap, dependency wiring, router registration, SPA catch-all route (serves `frontend/dist` when bundled, falling back to `index.html` for client-side routes)
 - `backend/app/api/` - FastAPI layer (routes, request/response schemas, dependency helpers)
-  - `routers/` - endpoints (`users`, `events`, `planning`, `availability`, `practices`, `google_calendar`, `health`)
+  - `routers/` - endpoints (`users`, `events`, `planning`, `availability`, `practices`, `google_calendar`, `health`, `admin`)
   - `schemas/` - Pydantic API contracts
   - `deps.py` - shared request dependencies (db session, settings, integrations)
 - `backend/app/application/services/` - use-case orchestration
   - `planning_service.py` - planning run orchestration + confirmation flow
   - `google_calendar_service.py` - OAuth, sync, event create/delete behavior
   - `user_service.py`, `event_service.py`, `availability_service.py` - domain workflow + persistence coordination
+  - `demo_seed_service.py` - seeds/resets realistic demo data for the public shared demo (see [Public demo](#public-demo))
 - `backend/app/domain/` - framework-independent scheduling logic
   - `scheduling/` - candidate generation, scoring, global planner
   - `availability/` - interval operations and availability semantics
@@ -57,15 +64,18 @@ Scheduling behavior in this codebase:
 - `backend/app/infrastructure/` - config, DB models/session, external adapters
   - `config.py` - env-backed settings
   - `db/` - SQLAlchemy models + session/base/types
+  - `demo_guard.py` - rate limiting + row-count cap, active only when running as the public demo
   - `integrations/google_calendar/client.py` - Google Calendar HTTP client
   - `integrations/llm/profile_preference_parser.py` - free-text preference parser (stub or Gemini-backed)
 - `backend/app/static/` - build output only (gitignored); populated by the Docker build from `frontend/dist`, empty otherwise
+- `backend/scripts/seed_demo.py` - CLI entrypoint for `demo_seed_service.py` (`python -m scripts.seed_demo`)
 
 ### Frontend app
 - `frontend/src/api/` - typed fetch client + TypeScript types matching the backend Pydantic schemas
 - `frontend/src/hooks/` - TanStack Query hooks per resource (users, availability, events, planning, calendar, google-calendar)
 - `frontend/src/pages/` + `frontend/src/components/` - member/availability/preference management, event scheduling, planning + confirmation, Google Calendar sync, weekly calendar overview with a per-member visibility/color panel and drag-to-reschedule
 - `frontend/src/components/ui/` - hand-built shadcn/ui primitives (Radix + class-variance-authority + tailwind-merge)
+- `*.test.ts(x)` files alongside the code they cover - Vitest + React Testing Library
 - See `frontend/README.md` for frontend-specific dev notes.
 
 ### Database and migrations
@@ -102,7 +112,7 @@ DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/scheduler
 Variables currently read by backend settings (`backend/app/infrastructure/config.py`):
 - `DATABASE_URL`
 - `FRONTEND_URL`
-- `GEMINI_API_KEY` (optional; if set, the Gemini-backed preference parser is used, model `gemini-2.5-flash` via the `google-genai` SDK; if unset, a deterministic stub parser is used instead)
+- `GEMINI_API_KEY` (optional; if set, the Gemini-backed preference parser is used, model `gemini-3.5-flash` via the `google-genai` SDK; if unset, a deterministic stub parser is used instead)
 - `OAUTH_STATE_SECRET` (needed for Google OAuth flow)
 - `GOOGLE_CLIENT_ID` (needed for Google OAuth flow)
 - `GOOGLE_CLIENT_SECRET` (needed for Google OAuth flow)
@@ -110,6 +120,7 @@ Variables currently read by backend settings (`backend/app/infrastructure/config
 - `AUTO_SYNC_ENABLED` (default `true`) - background sweep that refreshes every connected member's Google busy time on a timer, in addition to the manual "Sync busy time" button
 - `AUTO_SYNC_INTERVAL_MINUTES` (default `15`) - how often the sweep runs
 - `AUTO_SYNC_HORIZON_DAYS` (default `30`) - how far ahead each sweep syncs, matching the manual sync window
+- `ADMIN_RESET_TOKEN` (optional; unset by default) - enables `POST /api/v1/admin/reset-demo` and turns on per-IP rate limiting + a row-count cap on mutating requests. Leave unset for local dev and real deployments; this is only for running a public shared demo like the one linked above. See [Public demo](#public-demo).
 
 Notes:
 - Get a Gemini API key from Google AI Studio (https://aistudio.google.com/apikey) and set `GEMINI_API_KEY` in `.env`.
@@ -226,22 +237,31 @@ Backend, from `backend/` with your venv active:
 
 ```bash
 PYTHONPYCACHEPREFIX=/tmp/pycache PYTHONPATH=. python -m pytest -q
+ruff check .
 ```
 
 Frontend, from `frontend/`:
 
 ```bash
-npm run build   # tsc -b && vite build — type-checks and production-builds
+npm run build       # tsc -b && vite build — type-checks and production-builds
 npm run lint
+npm run test -- --run   # Vitest + React Testing Library
 ```
 
-There is no frontend unit/component test suite yet (see limitations below).
+Both run in CI (`.github/workflows/ci.yml`) on every push and PR — see the badge at the top of this file.
+
+## Public demo
+
+The [live demo](https://ai-scheduler-6pas.onrender.com) is a real deployment (Render + Neon Postgres), not a mockup, but it's public and has no auth, so a few things are deliberately different from a normal deployment:
+
+- **Shared, resettable data.** Anyone can create/edit/delete anything — there's no login. A scheduled job (`.github/workflows/reset-demo.yml`) truncates and reseeds realistic demo data every 4 hours via a token-guarded `POST /api/v1/admin/reset-demo` endpoint (`backend/app/application/services/demo_seed_service.py`). This whole mechanism is a no-op unless `ADMIN_RESET_TOKEN` is explicitly set, so it never affects local dev, tests, or a real deployment.
+- **Rate limiting + a capacity cap.** A per-IP sliding-window rate limit and a total-row-count cap on mutating requests (`backend/app/infrastructure/demo_guard.py`) bound how much a bot or bad actor can spam between resets. It's blunt on purpose — it doesn't try to stop one visitor from seeing another's edits, only how much damage accumulates before the next reset.
+- **Google Calendar connect is optional and shows a warning.** Since this is an unverified personal project, connecting your own Google account there shows Google's standard "unverified app" click-through warning. The demo is fully explorable without it — the seed script pre-populates realistic busy time directly, without going through OAuth.
 
 ## Current limitations
 
-- no auth/permissions system yet
+- no auth/permissions system yet — see [Public demo](#public-demo) for how the shared deployment copes with that
 - no recurring availability support
 - planning runs are still computed inline, on demand (only Google busy-time sync runs as a background job)
-- Google integration is functional for demo/dev, but not hardened as production OAuth infra
+- Google integration is functional for demo/dev, but not hardened as production OAuth infra, and isn't Google-verified (see [Public demo](#public-demo))
 - the automatic sync sweep assumes a single API process/replica; running multiple API instances would need a lock or an external scheduler to avoid duplicate sweeps
-- no frontend automated test suite (build + lint only)
