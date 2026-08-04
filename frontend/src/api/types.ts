@@ -289,3 +289,8 @@ export interface GoogleBusySyncResponse {
 export interface ApiErrorBody {
   detail: string | RescheduleConflictDetail;
 }
+
+export interface HealthRead {
+  status: string;
+  demo_mode: boolean;
+}
