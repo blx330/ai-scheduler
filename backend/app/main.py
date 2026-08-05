@@ -62,6 +62,7 @@ def create_app(
     app.state.session_factory = session_factory
     app.state.user_profile_preference_parser = user_profile_preference_parser or build_user_profile_preference_parser(
         api_key=app_settings.gemini_api_key,
+        model=app_settings.gemini_model,
     )
     app.state.google_calendar_client = google_calendar_client
 

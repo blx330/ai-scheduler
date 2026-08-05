@@ -124,8 +124,13 @@ export function EventsPage() {
       deadlineTime: parts.time,
       participants: selection,
     });
+    // Deliberately keyed on selectedEvent?.id (not the whole object) so a background
+    // refetch of `events` doesn't reset in-progress edits. `users?.length` (not `users`
+    // itself) reruns this once the organizer list finishes loading -- without it,
+    // organizerTz falls back to guessLocalTimezone() if users hasn't loaded yet and
+    // never corrects itself, showing the wrong deadline date/time for the organizer.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedEvent?.id, isCreating]);
+  }, [selectedEvent?.id, isCreating, users?.length]);
 
   // Number("") is 0 and a partially-typed value is NaN, neither of which the backend
   // accepts -- so gate on them here instead of surfacing a cryptic 400 after Save.
