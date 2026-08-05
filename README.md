@@ -43,7 +43,6 @@ Scheduling behavior in this codebase:
 - `frontend/` - React + TypeScript SPA (Vite, Tailwind CSS, shadcn/ui)
 - `infra/compose.yaml` - Docker Compose (Postgres + API, API image bundles the built frontend)
 - `.env.example` - sample env file used for local setup
-- `PROJECT_SNAPSHOT_2026-04-10.md` - project snapshot notes
 
 ### Backend app
 - `backend/app/main.py` - app bootstrap, dependency wiring, router registration, SPA catch-all route (serves `frontend/dist` when bundled, falling back to `index.html` for client-side routes)
@@ -72,9 +71,10 @@ Scheduling behavior in this codebase:
 
 ### Frontend app
 - `frontend/src/api/` - typed fetch client + TypeScript types matching the backend Pydantic schemas
-- `frontend/src/hooks/` - TanStack Query hooks per resource (users, availability, events, planning, calendar, google-calendar)
-- `frontend/src/pages/` + `frontend/src/components/` - member/availability/preference management, event scheduling, planning + confirmation, Google Calendar sync, weekly calendar overview with a per-member visibility/color panel and drag-to-reschedule
-- `frontend/src/components/ui/` - hand-built shadcn/ui primitives (Radix + class-variance-authority + tailwind-merge)
+- `frontend/src/hooks/` - TanStack Query hooks per resource (users, availability, events, planning, calendar, google-calendar), plus `use-block-drag.ts` for the calendar's drag-to-reschedule interaction
+- `frontend/src/pages/` - top-level routed views: Members, Member detail, Events, Calendar
+- `frontend/src/components/` - feature components (`people/`, `events/`, `layout/`) plus `calendar/` (week grid, side panels, dialogs behind the weekly calendar overview's per-member visibility/color panel and drag-to-reschedule) and shadcn primitives in `components/ui/`
+- `frontend/src/lib/` - class/timezone/datetime helpers, calendar grid geometry (`calendarGrid.ts`), the shared palette hash (`hash.ts`)
 - `*.test.ts(x)` files alongside the code they cover - Vitest + React Testing Library
 - See `frontend/README.md` for frontend-specific dev notes.
 
