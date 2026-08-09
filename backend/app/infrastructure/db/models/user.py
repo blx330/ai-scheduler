@@ -6,6 +6,7 @@ from datetime import datetime
 from sqlalchemy import JSON, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.domain.common.enums import UserRole
 from app.domain.preferences.models import CachedPracticePreference, PreferredPracticeTime
 from app.infrastructure.db.base import Base
 from app.infrastructure.db.models.availability import utcnow
@@ -19,6 +20,12 @@ class User(Base):
     email: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     timezone: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Login identity. role gates organizer-only actions (create/delete events and
+    # members, run/confirm planning); google_subject_id is Google's stable account
+    # id, matched on login after the first email match so a member changing their
+    # Google account's email later doesn't break their login.
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default=UserRole.MEMBER.value)
+    google_subject_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     preferred_practice_time: Mapped[str | None] = mapped_column(String(32), nullable=True)
     preferred_practice_time_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
     preferred_practice_time_parsed: Mapped[dict | None] = mapped_column(JSON, nullable=True)

@@ -17,6 +17,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { EventStatusBadge } from "@/components/events/EventStatusBadge";
 import { ParticipantPicker, type ParticipantSelection } from "@/components/events/ParticipantPicker";
+import { useCurrentUser } from "@/hooks/use-auth";
 import { useEventSessions, useEvents, useCreateEvent, useUpdateEvent } from "@/hooks/use-events";
 import { useUnschedulePractice } from "@/hooks/use-planning";
 import { useUsers } from "@/hooks/use-users";
@@ -72,6 +73,8 @@ export function EventsPage() {
   const navigate = useNavigate();
   const { data: events, isLoading: eventsLoading, isError: eventsError } = useEvents();
   const { data: users } = useUsers();
+  const { data: currentUser } = useCurrentUser();
+  const isOrganizer = currentUser?.role === "organizer";
   const createEvent = useCreateEvent();
   const updateEvent = useUpdateEvent();
   const unschedule = useUnschedulePractice();
@@ -238,19 +241,21 @@ export function EventsPage() {
             {eventItem.name}
           </button>
         ))}
-        <button
-          type="button"
-          onClick={() => {
-            setSelectedId(NEW_EVENT_ID);
-            navigate("/events", { replace: true });
-          }}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold border border-dashed",
-            isCreating ? "bg-secondary text-primary border-primary/30" : "text-foreground/60 border-black/15 hover:bg-accent/50",
-          )}
-        >
-          <Plus className="size-4" /> New dance
-        </button>
+        {isOrganizer ? (
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedId(NEW_EVENT_ID);
+              navigate("/events", { replace: true });
+            }}
+            className={cn(
+              "flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold border border-dashed",
+              isCreating ? "bg-secondary text-primary border-primary/30" : "text-foreground/60 border-black/15 hover:bg-accent/50",
+            )}
+          >
+            <Plus className="size-4" /> New dance
+          </button>
+        ) : null}
       </div>
 
       {!isCreating && selectedEvent && (
@@ -390,9 +395,13 @@ export function EventsPage() {
               <p className="text-xs text-destructive">Select at least one required participant.</p>
             )}
           </div>
-          <Button onClick={handleSave} disabled={!canSave || isSaving}>
-            {isSaving ? "Saving..." : isCreating ? "Create event" : "Save changes"}
-          </Button>
+          {isOrganizer ? (
+            <Button onClick={handleSave} disabled={!canSave || isSaving}>
+              {isSaving ? "Saving..." : isCreating ? "Create event" : "Save changes"}
+            </Button>
+          ) : (
+            <p className="text-xs text-muted-foreground">Only organizers can create or edit dances.</p>
+          )}
         </CardContent>
       </Card>
 
@@ -419,9 +428,11 @@ export function EventsPage() {
                       {session.total_score != null && <Badge variant="outline">score {session.total_score.toFixed(2)}</Badge>}
                     </div>
                   </div>
-                  <Button variant="outline" size="sm" onClick={() => unschedule.mutate(session.id)} disabled={unschedule.isPending}>
-                    <CalendarX className="size-4" /> Unschedule
-                  </Button>
+                  {isOrganizer ? (
+                    <Button variant="outline" size="sm" onClick={() => unschedule.mutate(session.id)} disabled={unschedule.isPending}>
+                      <CalendarX className="size-4" /> Unschedule
+                    </Button>
+                  ) : null}
                 </div>
               );
             })}

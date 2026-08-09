@@ -11,11 +11,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
-from app.api.routers import admin, availability, events, google_calendar, health, planning, practices, users
+from app.api.routers import admin, auth, availability, events, google_calendar, health, planning, practices, users
 from app.infrastructure.config import Settings
 from app.infrastructure.db.session import build_session_factory
 from app.infrastructure.demo_guard import DemoGuardMiddleware
 from app.infrastructure.integrations.google_calendar.client import build_google_calendar_client
+from app.infrastructure.integrations.google_identity.client import build_google_identity_client
 from app.infrastructure.integrations.llm.profile_preference_parser import build_user_profile_preference_parser
 from app.infrastructure.scheduling.auto_sync import auto_sync_loop
 
@@ -25,6 +26,7 @@ def create_app(
     session_factory=None,
     user_profile_preference_parser=None,
     google_calendar_client=None,
+    google_identity_client=None,
     static_dir: Path | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings()
@@ -33,6 +35,11 @@ def create_app(
         client_id=app_settings.google_client_id,
         client_secret=app_settings.google_client_secret,
         redirect_uri=app_settings.google_redirect_uri,
+    )
+    google_identity_client = google_identity_client or build_google_identity_client(
+        client_id=app_settings.google_client_id,
+        client_secret=app_settings.google_client_secret,
+        redirect_uri=app_settings.google_login_redirect_uri,
     )
 
     @asynccontextmanager
@@ -65,6 +72,7 @@ def create_app(
         model=app_settings.gemini_model,
     )
     app.state.google_calendar_client = google_calendar_client
+    app.state.google_identity_client = google_identity_client
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
@@ -91,6 +99,7 @@ def create_app(
         return JSONResponse(status_code=503, content={"detail": detail})
 
     app.include_router(health.router, prefix=app_settings.api_prefix)
+    app.include_router(auth.router, prefix=app_settings.api_prefix)
     app.include_router(users.router, prefix=app_settings.api_prefix)
     app.include_router(availability.router, prefix=app_settings.api_prefix)
     app.include_router(events.router, prefix=app_settings.api_prefix)

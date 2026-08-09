@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.infrastructure.config import Settings
 from app.main import create_app
+from tests.auth_helpers import TEST_SESSION_SECRET, log_in
 
 
 def _app_with_admin_token(session_factory, token: str):
@@ -10,6 +11,7 @@ def _app_with_admin_token(session_factory, token: str):
         auto_sync_enabled=False,
         GEMINI_API_KEY="",
         ADMIN_RESET_TOKEN=token,
+        SESSION_SECRET=TEST_SESSION_SECRET,
     )
     return create_app(settings=settings, session_factory=session_factory)
 
@@ -36,6 +38,7 @@ def test_reset_demo_reseeds_data_with_the_correct_token(session_factory) -> None
         assert response.status_code == 200
         assert response.json() == {"status": "reset"}
 
+        log_in(test_client)
         users = test_client.get("/api/v1/users").json()
         events = test_client.get("/api/v1/events").json()
         assert len(users) == 4

@@ -22,12 +22,32 @@ class Settings(BaseSettings):
     google_client_id: str | None = Field(default=None, validation_alias="GOOGLE_CLIENT_ID")
     google_client_secret: str | None = Field(default=None, validation_alias="GOOGLE_CLIENT_SECRET")
     google_redirect_uri: str | None = Field(default=None, validation_alias="GOOGLE_REDIRECT_URI")
+    # Login (who is this) is a separate OAuth flow/redirect URI from calendar connect
+    # (sync this person's busy time) -- same Google client id/secret, different scopes
+    # and a different Google Cloud Console redirect URI entry.
+    google_login_redirect_uri: str | None = Field(default=None, validation_alias="GOOGLE_LOGIN_REDIRECT_URI")
+    session_secret: str | None = Field(default=None, validation_alias="SESSION_SECRET")
+    session_cookie_max_age_days: int = Field(default=30, validation_alias="SESSION_COOKIE_MAX_AGE_DAYS")
+    # Emails that always get (or are upgraded to) the organizer role on login, and may
+    # log in even before any matching users row exists -- bootstraps the first
+    # organizer, since nobody starts out able to promote anyone.
+    admin_emails: list[str] = Field(default_factory=list, validation_alias="ADMIN_EMAILS")
     auto_sync_enabled: bool = True
     auto_sync_interval_minutes: int = 15
     auto_sync_horizon_days: int = 30
     # Gates POST /api/v1/admin/reset-demo. Left unset, that endpoint 404s -- it only
     # exists at all once a deployment explicitly opts into being a public shared demo.
     admin_reset_token: str = Field(default="", validation_alias="ADMIN_RESET_TOKEN")
+
+    @field_validator("admin_emails", mode="before")
+    @classmethod
+    def parse_comma_separated_admin_emails(cls, value):
+        # A plain .env value ("a@x.com,b@y.com") isn't valid JSON, which is what
+        # pydantic-settings expects by default for a list field read from the
+        # environment -- split it by hand instead of asking users to write JSON in .env.
+        if isinstance(value, str):
+            return [item.strip().lower() for item in value.split(",") if item.strip()]
+        return value
 
     @field_validator("database_url", mode="before")
     @classmethod
@@ -66,5 +86,21 @@ class Settings(BaseSettings):
                 "Calendar integration will not work: %s. "
                 "Set them in your .env file or hosting platform env vars.",
                 missing,
+            )
+
+        missing_login = []
+        if not self.session_secret:
+            missing_login.append("SESSION_SECRET")
+        if not self.google_client_id:
+            missing_login.append("GOOGLE_CLIENT_ID")
+        if not self.google_client_secret:
+            missing_login.append("GOOGLE_CLIENT_SECRET")
+        if not self.google_login_redirect_uri:
+            missing_login.append("GOOGLE_LOGIN_REDIRECT_URI")
+        if missing_login:
+            _cfg_logger.warning(
+                "STARTUP WARNING: The following env vars are missing and sign-in "
+                "will not work: %s. Set them in your .env file or hosting platform env vars.",
+                missing_login,
             )
         return self

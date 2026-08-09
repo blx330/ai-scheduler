@@ -3,8 +3,16 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_user_profile_preference_parser
+from app.api.deps import (
+    get_current_user,
+    get_db,
+    get_user_profile_preference_parser,
+    require_organizer,
+    require_self_or_organizer,
+)
+from app.api.schemas.auth import UserRoleUpdate
 from app.api.schemas.users import UserCreate, UserRead, UserUpdate
+from app.application.services.auth_service import SessionIdentity
 from app.application.services.user_service import UserService
 from app.infrastructure.integrations.llm.profile_preference_parser import UserProfilePreferenceParser
 
@@ -16,6 +24,7 @@ def create_user(
     payload: UserCreate,
     db: Session = Depends(get_db),
     preference_parser: UserProfilePreferenceParser = Depends(get_user_profile_preference_parser),
+    _: SessionIdentity = Depends(require_organizer),
 ) -> UserRead:
     try:
         user = UserService(db).create_user(payload, preference_parser=preference_parser)
@@ -25,13 +34,13 @@ def create_user(
 
 
 @router.get("", response_model=list[UserRead])
-def list_users(db: Session = Depends(get_db)) -> list[UserRead]:
+def list_users(db: Session = Depends(get_db), _: SessionIdentity = Depends(get_current_user)) -> list[UserRead]:
     users = UserService(db).list_users()
     return [UserRead.model_validate(user) for user in users]
 
 
 @router.get("/{user_id}", response_model=UserRead)
-def get_user(user_id: UUID, db: Session = Depends(get_db)) -> UserRead:
+def get_user(user_id: UUID, db: Session = Depends(get_db), _: SessionIdentity = Depends(get_current_user)) -> UserRead:
     user = UserService(db).get_user(user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
@@ -44,6 +53,7 @@ def update_user(
     payload: UserUpdate,
     db: Session = Depends(get_db),
     preference_parser: UserProfilePreferenceParser = Depends(get_user_profile_preference_parser),
+    _: SessionIdentity = Depends(require_self_or_organizer),
 ) -> UserRead:
     try:
         user = UserService(db).update_user(user_id, payload, preference_parser=preference_parser)
@@ -54,8 +64,24 @@ def update_user(
     return UserRead.model_validate(user)
 
 
+@router.patch("/{user_id}/role", response_model=UserRead)
+def update_user_role(
+    user_id: UUID,
+    payload: UserRoleUpdate,
+    db: Session = Depends(get_db),
+    _: SessionIdentity = Depends(require_organizer),
+) -> UserRead:
+    try:
+        user = UserService(db).update_role(user_id, payload.role)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return UserRead.model_validate(user)
+
+
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_user(user_id: UUID, db: Session = Depends(get_db)) -> None:
+def delete_user(user_id: UUID, db: Session = Depends(get_db), _: SessionIdentity = Depends(require_organizer)) -> None:
     try:
         deleted = UserService(db).delete_user(user_id)
     except ValueError as exc:

@@ -15,6 +15,7 @@ interface DancesPanelProps {
   onSuggestSessions: () => void;
   onNewEvent: () => void;
   isPending: boolean;
+  canEdit: boolean;
 }
 
 export function DancesPanel({
@@ -25,6 +26,7 @@ export function DancesPanel({
   onSuggestSessions,
   onNewEvent,
   isPending,
+  canEdit,
 }: DancesPanelProps) {
   return (
     <Card className="p-5">
@@ -63,12 +65,18 @@ export function DancesPanel({
         {events.length === 0 && <p className="text-xs text-muted-foreground">No dances yet &mdash; add one on the Events page.</p>}
       </div>
 
-      <Button className="w-full mb-2" variant="secondary" onClick={onSuggestSessions} disabled={isPending}>
-        <Sparkles className="size-4" /> Suggest sessions
-      </Button>
-      <Button className="w-full" onClick={onNewEvent} disabled={isPending}>
-        <Plus className="size-4" /> New event
-      </Button>
+      {canEdit ? (
+        <>
+          <Button className="w-full mb-2" variant="secondary" onClick={onSuggestSessions} disabled={isPending}>
+            <Sparkles className="size-4" /> Suggest sessions
+          </Button>
+          <Button className="w-full" onClick={onNewEvent} disabled={isPending}>
+            <Plus className="size-4" /> New event
+          </Button>
+        </>
+      ) : (
+        <p className="text-xs text-muted-foreground">Only organizers can run planning or add dances.</p>
+      )}
     </Card>
   );
 }

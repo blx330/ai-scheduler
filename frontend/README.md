@@ -17,9 +17,9 @@ npm run test -- --run  # Vitest + React Testing Library
 ## Structure
 
 - `src/api/` - typed fetch client (`client.ts`), endpoint paths (`endpoints.ts`), and TypeScript types mirroring the backend Pydantic schemas (`types.ts`)
-- `src/hooks/` - one TanStack Query hook module per backend resource (users, availability, events, planning, calendar, google-calendar), plus `use-block-drag.ts` for the calendar's drag-to-reschedule interaction; mutations invalidate related queries and toast on error
-- `src/pages/` - top-level routed views: `/calendar` (`CalendarPage`), `/members` and `/members/:userId` (`MembersPage`, `MemberDetailPage`), `/events` and `/events/:eventId` (`EventsPage`) — see `src/App.tsx` for the route table
-- `src/components/` - feature components (`people/`, `events/`, `calendar/`, `layout/`) plus shadcn primitives in `components/ui/`
+- `src/hooks/` - one TanStack Query hook module per backend resource (users, availability, events, planning, calendar, google-calendar), plus `use-auth.ts` (current user + logout) and `use-block-drag.ts` for the calendar's drag-to-reschedule interaction; mutations invalidate related queries and toast on error
+- `src/pages/` - top-level routed views: `/calendar` (`CalendarPage`), `/members` and `/members/:userId` (`MembersPage`, `MemberDetailPage`), `/events` and `/events/:eventId` (`EventsPage`) — see `src/App.tsx` for the route table and its sign-in gate (renders `components/auth/LoginPage.tsx` until `useCurrentUser()` resolves)
+- `src/components/` - feature components (`people/`, `events/`, `calendar/`, `layout/`, `auth/`) plus shadcn primitives in `components/ui/`. Organizer-only actions (create/delete members and dances, run/confirm planning, reschedule) are hidden per-component behind the current user's role — the backend is the actual enforcement point, this is just UX
 - `src/lib/` - `cn()` class helper, IANA timezone list, local-time/ISO conversion helpers, calendar grid geometry (`calendarGrid.ts`), the shared palette hash (`hash.ts`), and the shared `QueryClient`
 
 ## Known simplifications

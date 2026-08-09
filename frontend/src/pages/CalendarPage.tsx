@@ -11,6 +11,7 @@ import { MembersPanel } from "@/components/calendar/MembersPanel";
 import { WeekGrid } from "@/components/calendar/WeekGrid";
 import { FallbackConfirmDialog, type PendingFallback } from "@/components/calendar/FallbackConfirmDialog";
 import { RescheduleConflictDialog, type PendingReschedule } from "@/components/calendar/RescheduleConflictDialog";
+import { useCurrentUser } from "@/hooks/use-auth";
 import { useBlockDrag } from "@/hooks/use-block-drag";
 import { useCalendarOverview } from "@/hooks/use-calendar";
 import { useEvents } from "@/hooks/use-events";
@@ -30,6 +31,8 @@ import type {
 export function CalendarPage() {
   const { data: events, isError: eventsError } = useEvents();
   const { data: users } = useUsers();
+  const { data: currentUser } = useCurrentUser();
+  const isOrganizer = currentUser?.role === "organizer";
   const createRun = useCreatePlanningRun();
   const confirmRun = useConfirmPlanningRun();
   const reschedulePractice = useReschedulePractice();
@@ -306,9 +309,11 @@ export function CalendarPage() {
             </Button>
           </div>
         </div>
-        <Button variant={editMode ? "default" : "outline"} size="sm" onClick={() => setEditMode((prev) => !prev)}>
-          <Pencil className="size-4" /> {editMode ? "Done editing" : "Edit calendar"}
-        </Button>
+        {isOrganizer ? (
+          <Button variant={editMode ? "default" : "outline"} size="sm" onClick={() => setEditMode((prev) => !prev)}>
+            <Pencil className="size-4" /> {editMode ? "Done editing" : "Edit calendar"}
+          </Button>
+        ) : null}
       </div>
 
       <div className="flex gap-5 items-start flex-1 min-h-0">
@@ -338,6 +343,7 @@ export function CalendarPage() {
               onSuggestSessions={handleSuggestSessions}
               onNewEvent={handleNewEvent}
               isPending={createRun.isPending}
+              canEdit={isOrganizer}
             />
             <MembersPanel
               users={users ?? []}

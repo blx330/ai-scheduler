@@ -3,9 +3,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
+from app.api.deps import get_current_user, get_db, require_self_or_organizer
 from app.api.schemas.availability import AvailabilityCreate, AvailabilityRead
 from app.api.schemas.common import MessageResponse
+from app.application.services.auth_service import SessionIdentity
 from app.application.services.availability_service import AvailabilityService
 from app.application.services.user_service import UserService
 
@@ -17,6 +18,7 @@ def create_availability(
     user_id: UUID,
     payload: AvailabilityCreate,
     db: Session = Depends(get_db),
+    _: SessionIdentity = Depends(require_self_or_organizer),
 ) -> AvailabilityRead:
     user = UserService(db).get_user(user_id)
     if user is None:
@@ -29,7 +31,9 @@ def create_availability(
 
 
 @router.get("", response_model=list[AvailabilityRead])
-def list_availability(user_id: UUID, db: Session = Depends(get_db)) -> list[AvailabilityRead]:
+def list_availability(
+    user_id: UUID, db: Session = Depends(get_db), _: SessionIdentity = Depends(get_current_user)
+) -> list[AvailabilityRead]:
     user = UserService(db).get_user(user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
@@ -42,6 +46,7 @@ def delete_availability(
     user_id: UUID,
     interval_id: UUID,
     db: Session = Depends(get_db),
+    _: SessionIdentity = Depends(require_self_or_organizer),
 ) -> MessageResponse:
     deleted = AvailabilityService(db).delete_interval(user_id=user_id, interval_id=interval_id)
     if not deleted:
