@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_google_calendar_client, get_settings
+from app.api.deps import get_current_user, get_db, get_google_calendar_client, get_settings, require_self_or_organizer
 from app.api.schemas.google_calendar import (
     GoogleBusySyncRequest,
     GoogleBusySyncResponse,
@@ -17,6 +17,7 @@ from app.api.schemas.google_calendar import (
     GoogleOAuthStartRequest,
     GoogleOAuthStartResponse,
 )
+from app.application.services.auth_service import SessionIdentity
 from app.application.services.google_calendar_service import GoogleCalendarService
 from app.infrastructure.config import Settings
 from app.infrastructure.integrations.google_calendar.client import GoogleCalendarProvider
@@ -30,6 +31,7 @@ def start_google_oauth_for_user(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     client: GoogleCalendarProvider = Depends(get_google_calendar_client),
+    _: SessionIdentity = Depends(require_self_or_organizer),
 ) -> GoogleOAuthStartResponse:
     try:
         authorization_url = GoogleCalendarService(db, settings, client).begin_oauth(user_id)
@@ -44,7 +46,10 @@ def start_google_oauth(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     client: GoogleCalendarProvider = Depends(get_google_calendar_client),
+    current_user: SessionIdentity = Depends(get_current_user),
 ) -> GoogleOAuthStartResponse:
+    if not current_user.is_organizer and current_user.user_id != payload.user_id:
+        raise HTTPException(status_code=403, detail="You can only connect your own calendar")
     try:
         authorization_url = GoogleCalendarService(db, settings, client).begin_oauth(payload.user_id)
     except (ValueError, RuntimeError) as exc:
@@ -75,6 +80,7 @@ def get_google_connection(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     client: GoogleCalendarProvider = Depends(get_google_calendar_client),
+    _: SessionIdentity = Depends(require_self_or_organizer),
 ) -> GoogleCalendarConnectionRead:
     connection = GoogleCalendarService(db, settings, client).get_connection_status(user_id)
     return GoogleCalendarConnectionRead(
@@ -94,6 +100,7 @@ def list_google_calendars(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     client: GoogleCalendarProvider = Depends(get_google_calendar_client),
+    _: SessionIdentity = Depends(require_self_or_organizer),
 ) -> list[GoogleCalendarSummaryRead]:
     try:
         calendars = GoogleCalendarService(db, settings, client).list_calendars(user_id)
@@ -118,6 +125,7 @@ def select_google_calendars(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     client: GoogleCalendarProvider = Depends(get_google_calendar_client),
+    _: SessionIdentity = Depends(require_self_or_organizer),
 ) -> GoogleCalendarConnectionRead:
     try:
         connection = GoogleCalendarService(db, settings, client).save_calendar_selection(
@@ -145,6 +153,7 @@ def sync_google_busy_times(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     client: GoogleCalendarProvider = Depends(get_google_calendar_client),
+    _: SessionIdentity = Depends(require_self_or_organizer),
 ) -> GoogleBusySyncResponse:
     try:
         result = GoogleCalendarService(db, settings, client).sync_busy_intervals(

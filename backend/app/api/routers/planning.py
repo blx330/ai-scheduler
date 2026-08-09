@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_google_calendar_client, get_settings
+from app.api.deps import get_current_user, get_db, get_google_calendar_client, get_settings, require_organizer
 from app.api.routers._planning_serializers import (
     serialize_busy_interval,
     serialize_planning_run,
@@ -18,6 +18,7 @@ from app.api.schemas.planning import (
     PlanningRunCreate,
     PlanningRunRead,
 )
+from app.application.services.auth_service import SessionIdentity
 from app.application.services.google_calendar_service import GoogleCalendarService
 from app.application.services.planning_service import PlanningService
 from app.domain.common.datetime_utils import ensure_utc
@@ -31,6 +32,7 @@ router = APIRouter(tags=["planning"])
 def create_planning_run(
     payload: PlanningRunCreate,
     db: Session = Depends(get_db),
+    _: SessionIdentity = Depends(require_organizer),
 ) -> PlanningRunRead:
     try:
         run = PlanningService(db).create_planning_run(payload)
@@ -40,7 +42,9 @@ def create_planning_run(
 
 
 @router.get("/planning-runs/{run_id}", response_model=PlanningRunRead)
-def get_planning_run(run_id: UUID, db: Session = Depends(get_db)) -> PlanningRunRead:
+def get_planning_run(
+    run_id: UUID, db: Session = Depends(get_db), _: SessionIdentity = Depends(get_current_user)
+) -> PlanningRunRead:
     run = PlanningService(db).get_planning_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Planning run not found")
@@ -54,6 +58,7 @@ def confirm_planning_results(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     client: GoogleCalendarProvider = Depends(get_google_calendar_client),
+    _: SessionIdentity = Depends(require_organizer),
 ) -> PlanningRunConfirmResponse:
     try:
         run, confirmed_sessions, warnings = PlanningService(db).confirm_results(
@@ -79,6 +84,7 @@ def get_calendar_overview(
     end: datetime,
     user_ids: Annotated[list[UUID], Query()] = [],
     db: Session = Depends(get_db),
+    _: SessionIdentity = Depends(get_current_user),
 ) -> CalendarOverviewRead:
     # Every other datetime input rejects naive values; without this the same naive
     # string here was silently relabelled as UTC, shifting the whole window.

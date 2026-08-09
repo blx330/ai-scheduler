@@ -9,6 +9,7 @@ function makeUser(overrides: Partial<UserRead>): UserRead {
     display_name: "Alice",
     timezone: "America/New_York",
     email: null,
+    role: "member",
     preferred_practice_time: null,
     preferred_practice_time_raw: null,
     preferred_practice_time_parsed: null,

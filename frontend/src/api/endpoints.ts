@@ -3,6 +3,7 @@ import type {
   AvailabilityCreate,
   AvailabilityRead,
   CalendarOverviewRead,
+  CurrentUserRead,
   DanceEventCreate,
   DanceEventRead,
   DanceEventUpdate,
@@ -23,6 +24,7 @@ import type {
   PracticeUnscheduleResponse,
   UserCreate,
   UserRead,
+  UserRole,
   UserUpdate,
 } from "./types";
 
@@ -30,11 +32,17 @@ export const healthApi = {
   get: () => api.get<HealthRead>("/health"),
 };
 
+export const authApi = {
+  me: () => api.get<CurrentUserRead>("/auth/me"),
+  logout: () => api.post<{ status: string }>("/auth/logout"),
+};
+
 export const usersApi = {
   list: () => api.get<UserRead[]>("/users"),
   get: (id: string) => api.get<UserRead>(`/users/${id}`),
   create: (body: UserCreate) => api.post<UserRead>("/users", body),
   update: (id: string, body: UserUpdate) => api.patch<UserRead>(`/users/${id}`, body),
+  updateRole: (id: string, role: UserRole) => api.patch<UserRead>(`/users/${id}/role`, { role }),
   remove: (id: string) => api.delete<void>(`/users/${id}`),
 };
 

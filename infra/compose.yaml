@@ -20,6 +20,7 @@ services:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/scheduler
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8000}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/v1/google/oauth/callback}
+      GOOGLE_LOGIN_REDIRECT_URI: ${GOOGLE_LOGIN_REDIRECT_URI:-http://localhost:8000/api/v1/auth/google/callback}
     ports:
       - "8000:8000"
     depends_on:

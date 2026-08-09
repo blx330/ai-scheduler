@@ -12,6 +12,7 @@ export const queryKeys = {
   googleConnection: (userId: string) => ["google-connection", userId] as const,
   googleCalendars: (userId: string) => ["google-calendars", userId] as const,
   health: ["health"] as const,
+  currentUser: ["current-user"] as const,
 };
 
 export function errorMessage(error: unknown): string {

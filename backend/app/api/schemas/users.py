@@ -38,6 +38,7 @@ class UserRead(BaseModel):
     display_name: str
     timezone: str
     email: str | None
+    role: str
     preferred_practice_time: PreferredPracticeTime | None
     preferred_practice_time_raw: str | None
     preferred_practice_time_parsed: dict | None

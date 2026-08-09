@@ -131,8 +131,8 @@ Unless explicitly changed, assume these project rules are binding:
 - each user has an IANA timezone
 - daily scheduling windows are interpreted in the organizer’s timezone
 - scheduling uses deterministic weighted ranking only
-- no auth in this phase
-- no tenant model in this phase
+- auth is Google sign-in resolving to an existing (or admin-provisioned) `users` row, with two flat roles (organizer, member) and no per-dance or per-team permissions -- see `backend/app/application/services/auth_service.py` and the "Authentication" section of the root README
+- no tenant model in this phase -- one shared roster, not multiple isolated teams
 - no recurring availability in this phase
 - no production OAuth in this phase
 - calendar integration is scaffold-only in this phase
@@ -275,7 +275,7 @@ Do not add unless explicitly requested:
 - microservices
 - background jobs
 - advanced caching
-- auth systems
+- roles/permissions beyond the existing flat organizer/member split
 - organization/tenant abstractions
 - websocket features
 - generic framework layers
