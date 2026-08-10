@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.schemas.users import UserCreate, UserUpdate
 from app.domain.common.datetime_utils import ensure_utc
+from app.domain.common.enums import UserRole
 from app.domain.preferences.models import CachedPracticePreference
 from app.infrastructure.db.models import (
     CalendarConnection,
@@ -136,6 +137,18 @@ class UserService:
         except IntegrityError as exc:
             self.db.rollback()
             raise ValueError("A user with that email already exists") from exc
+        self.db.refresh(user)
+        return user
+
+    def update_role(self, user_id, role: str) -> User | None:
+        if role not in {UserRole.ORGANIZER.value, UserRole.MEMBER.value}:
+            raise ValueError(f"Invalid role: {role!r}")
+        user = self.db.get(User, user_id)
+        if user is None:
+            return None
+        user.role = role
+        self.db.add(user)
+        self.db.commit()
         self.db.refresh(user)
         return user
 

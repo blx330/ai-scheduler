@@ -9,16 +9,27 @@ export interface CachedPracticePreference {
   summary: string | null;
 }
 
+export type UserRole = "organizer" | "member";
+
 export interface UserRead {
   id: string;
   display_name: string;
   timezone: string;
   email: string | null;
+  role: UserRole;
   preferred_practice_time: PreferredPracticeTime | null;
   preferred_practice_time_raw: string | null;
   preferred_practice_time_parsed: CachedPracticePreference | null;
   preferred_practice_time_summary: string | null;
   created_at: string;
+}
+
+export interface CurrentUserRead {
+  id: string;
+  display_name: string;
+  email: string | null;
+  timezone: string;
+  role: UserRole;
 }
 
 export interface UserCreate {

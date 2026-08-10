@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.infrastructure.config import Settings
 from app.main import create_app
+from tests.auth_helpers import TEST_SESSION_SECRET, log_in
 
 
 def _demo_app(session_factory):
@@ -10,6 +11,7 @@ def _demo_app(session_factory):
         auto_sync_enabled=False,
         GEMINI_API_KEY="",
         ADMIN_RESET_TOKEN="demo-token",
+        SESSION_SECRET=TEST_SESSION_SECRET,
     )
     return create_app(settings=settings, session_factory=session_factory)
 
@@ -30,6 +32,7 @@ def test_row_cap_blocks_creation_once_the_demo_capacity_limit_is_reached(session
     monkeypatch.setattr("app.infrastructure.demo_guard.DEMO_ROW_LIMIT", 2)
     app = _demo_app(session_factory)
     with TestClient(app) as test_client:
+        log_in(test_client)
         first = test_client.post("/api/v1/users", json=_create_user_payload(1))
         second = test_client.post("/api/v1/users", json=_create_user_payload(2))
         assert first.status_code == 201
@@ -44,6 +47,7 @@ def test_rate_limit_blocks_bursts_past_the_configured_threshold(session_factory,
     monkeypatch.setattr("app.infrastructure.demo_guard.RATE_LIMIT_MAX_REQUESTS", 2)
     app = _demo_app(session_factory)
     with TestClient(app) as test_client:
+        log_in(test_client)
         statuses = [
             test_client.post("/api/v1/users", json=_create_user_payload(n)).status_code for n in range(3)
         ]

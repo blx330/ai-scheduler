@@ -3,13 +3,14 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_google_calendar_client, get_settings
+from app.api.deps import get_db, get_google_calendar_client, get_settings, require_organizer
 from app.api.routers._planning_serializers import serialize_practice_session
 from app.api.schemas.planning import (
     PracticeRescheduleRequest,
     PracticeRescheduleResponse,
     PracticeUnscheduleResponse,
 )
+from app.application.services.auth_service import SessionIdentity
 from app.application.services.google_calendar_service import GoogleCalendarService
 from app.application.services.planning_service import PlanningService, SchedulingConflictError
 from app.infrastructure.config import Settings
@@ -24,6 +25,7 @@ def unschedule_practice(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     client: GoogleCalendarProvider = Depends(get_google_calendar_client),
+    _: SessionIdentity = Depends(require_organizer),
 ) -> PracticeUnscheduleResponse:
     planning_service = PlanningService(db)
     practice_session = planning_service.get_practice_session(practice_id)
@@ -58,6 +60,7 @@ def reschedule_practice(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     client: GoogleCalendarProvider = Depends(get_google_calendar_client),
+    _: SessionIdentity = Depends(require_organizer),
 ) -> PracticeRescheduleResponse:
     planning_service = PlanningService(db)
     try:

@@ -2,6 +2,7 @@ import { useNavigate } from "react-router-dom";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { CreateMemberDialog } from "@/components/people/CreateMemberDialog";
+import { useCurrentUser } from "@/hooks/use-auth";
 import { useUsers } from "@/hooks/use-users";
 import { userColor } from "@/lib/userColor";
 
@@ -16,7 +17,9 @@ function initialsFor(name: string): string {
 
 export function MembersPage() {
   const { data: users, isLoading, isError } = useUsers();
+  const { data: currentUser } = useCurrentUser();
   const navigate = useNavigate();
+  const isOrganizer = currentUser?.role === "organizer";
 
   return (
     <div className="space-y-5 max-w-2xl">
@@ -25,7 +28,7 @@ export function MembersPage() {
           <p className="text-xs text-muted-foreground mb-1">Dashboard / Members</p>
           <h2 className="text-2xl font-bold tracking-tight">Members</h2>
         </div>
-        <CreateMemberDialog />
+        {isOrganizer ? <CreateMemberDialog /> : null}
       </div>
 
       <Card className="p-2">

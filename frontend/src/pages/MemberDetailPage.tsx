@@ -6,11 +6,13 @@ import { Separator } from "@/components/ui/separator";
 import { AvailabilityPanel } from "@/components/people/AvailabilityPanel";
 import { GoogleCalendarPanel } from "@/components/people/GoogleCalendarPanel";
 import { MemberPreferencesCard } from "@/components/people/MemberPreferencesCard";
+import { useCurrentUser } from "@/hooks/use-auth";
 import { useDeleteUser, useUser } from "@/hooks/use-users";
 
 export function MemberDetailPage() {
   const { userId } = useParams<{ userId: string }>();
   const { data: user, isLoading, isError } = useUser(userId);
+  const { data: currentUser } = useCurrentUser();
   const deleteUser = useDeleteUser();
   const navigate = useNavigate();
 
@@ -30,17 +32,19 @@ export function MemberDetailPage() {
             {user.email ?? "No email"} &middot; {user.timezone}
           </p>
         </div>
-        <Button
-          variant="destructive"
-          size="sm"
-          onClick={() => {
-            if (confirm(`Remove ${user.display_name}? This cannot be undone.`)) {
-              deleteUser.mutate(user.id, { onSuccess: () => navigate("/members") });
-            }
-          }}
-        >
-          <Trash2 /> Remove member
-        </Button>
+        {currentUser?.role === "organizer" ? (
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={() => {
+              if (confirm(`Remove ${user.display_name}? This cannot be undone.`)) {
+                deleteUser.mutate(user.id, { onSuccess: () => navigate("/members") });
+              }
+            }}
+          >
+            <Trash2 /> Remove member
+          </Button>
+        ) : null}
       </div>
 
       <Separator />

@@ -18,12 +18,12 @@ The API is served by FastAPI (`backend/`). The UI is a React SPA (`frontend/`) t
 ## What the project does right now
 
 Current flow:
-1. Create users
+1. Sign in with Google (see [Authentication](#authentication)) — an organizer creates team-roster profiles first, then each member signs in with the email their profile uses
 2. Add manual availability (explicit free intervals)
 3. Optionally connect Google Calendar — once connected, busy intervals sync automatically on a timer (also syncable on demand)
-4. Create events with required participants
-5. Run planning (`/api/v1/planning-runs`) to get top recommendations
-6. Confirm selected results and optionally create Google Calendar events
+4. Create events with required participants (organizer only)
+5. Run planning (`/api/v1/planning-runs`) to get top recommendations (organizer only)
+6. Confirm selected results and optionally create Google Calendar events (organizer only)
 
 The calendar page shows a week grid with per-dance session blocks (drag to reschedule) and a Members panel where each member gets a checkbox and a unique color — toggle a member to show or hide their Google-derived busy time on the grid, labeled with their name.
 
@@ -47,12 +47,13 @@ Scheduling behavior in this codebase:
 ### Backend app
 - `backend/app/main.py` - app bootstrap, dependency wiring, router registration, SPA catch-all route (serves `frontend/dist` when bundled, falling back to `index.html` for client-side routes)
 - `backend/app/api/` - FastAPI layer (routes, request/response schemas, dependency helpers)
-  - `routers/` - endpoints (`users`, `events`, `planning`, `availability`, `practices`, `google_calendar`, `health`, `admin`)
+  - `routers/` - endpoints (`users`, `events`, `planning`, `availability`, `practices`, `google_calendar`, `auth`, `health`, `admin`)
   - `schemas/` - Pydantic API contracts
-  - `deps.py` - shared request dependencies (db session, settings, integrations)
+  - `deps.py` - shared request dependencies (db session, settings, integrations, `get_current_user`/`require_organizer`/`require_self_or_organizer`)
 - `backend/app/application/services/` - use-case orchestration
   - `planning_service.py` - planning run orchestration + confirmation flow
-  - `google_calendar_service.py` - OAuth, sync, event create/delete behavior
+  - `google_calendar_service.py` - Calendar-connect OAuth, sync, event create/delete behavior
+  - `auth_service.py` - sign-in OAuth: matches/creates a `users` row from a verified Google identity, issues the session token
   - `user_service.py`, `event_service.py`, `availability_service.py` - domain workflow + persistence coordination
   - `demo_seed_service.py` - seeds/resets realistic demo data for the public shared demo (see [Public demo](#public-demo))
 - `backend/app/domain/` - framework-independent scheduling logic
@@ -64,7 +65,9 @@ Scheduling behavior in this codebase:
   - `config.py` - env-backed settings
   - `db/` - SQLAlchemy models + session/base/types
   - `demo_guard.py` - rate limiting + row-count cap, active only when running as the public demo
-  - `integrations/google_calendar/client.py` - Google Calendar HTTP client
+  - `auth/session_tokens.py` - HMAC-signed, expiring tokens used for both the login session cookie and the sign-in OAuth `state` param
+  - `integrations/google_calendar/client.py` - Google Calendar HTTP client (connect flow)
+  - `integrations/google_identity/client.py` - Google sign-in HTTP client (login flow; verifies the id_token via Google's tokeninfo endpoint)
   - `integrations/llm/profile_preference_parser.py` - free-text preference parser (stub or Gemini-backed)
 - `backend/app/static/` - build output only (gitignored); populated by the Docker build from `frontend/dist`, empty otherwise
 - `backend/scripts/seed_demo.py` - CLI entrypoint for `demo_seed_service.py` (`python -m scripts.seed_demo`)
@@ -83,10 +86,11 @@ Scheduling behavior in this codebase:
 - `backend/alembic/versions/` - migration history
 
 ### Tests
-- `backend/tests/integration/api/` - API integration tests
+- `backend/tests/integration/api/` - API integration tests (including `test_auth_api.py` for sign-in, sessions, and role permissions)
 - `backend/tests/unit/domain/` - scheduling and interval unit tests
-- `backend/tests/unit/infrastructure/` - integration client unit tests
+- `backend/tests/unit/infrastructure/` - integration client unit tests (including the session token signer and the Google identity client)
 - `backend/tests/conftest.py` - shared test setup/fixtures
+- `backend/tests/auth_helpers.py` - mints a session cookie directly (same signer the app uses) so tests can authenticate a `TestClient` without a real Google login round-trip
 
 ## Requirements
 
@@ -114,19 +118,56 @@ Variables currently read by backend settings (`backend/app/infrastructure/config
 - `FRONTEND_URL`
 - `GEMINI_API_KEY` (optional; if set, the Gemini-backed preference parser is used via the `google-genai` SDK; if unset, a deterministic stub parser is used instead)
 - `GEMINI_MODEL` (default `gemini-3.6-flash`) - which Gemini model the preference parser calls; only relevant when `GEMINI_API_KEY` is set
-- `OAUTH_STATE_SECRET` (needed for Google OAuth flow)
-- `GOOGLE_CLIENT_ID` (needed for Google OAuth flow)
-- `GOOGLE_CLIENT_SECRET` (needed for Google OAuth flow)
-- `GOOGLE_REDIRECT_URI` (needed for Google OAuth flow)
+- `OAUTH_STATE_SECRET` (needed for the Google Calendar *connect* OAuth flow)
+- `GOOGLE_CLIENT_ID` (needed for both Google OAuth flows below)
+- `GOOGLE_CLIENT_SECRET` (needed for both Google OAuth flows below)
+- `GOOGLE_REDIRECT_URI` (needed for the Google Calendar *connect* OAuth flow)
+- `GOOGLE_LOGIN_REDIRECT_URI` (needed for the sign-in OAuth flow, see [Authentication](#authentication))
+- `SESSION_SECRET` (needed for sign-in; signs the login session cookie — use a different value from `OAUTH_STATE_SECRET`)
+- `SESSION_COOKIE_MAX_AGE_DAYS` (default `30`) - how long a signed-in session stays valid
+- `ADMIN_EMAILS` (optional; comma-separated) - emails that get the organizer role on first login, even before a matching team-roster profile exists. Bootstraps the first organizer; see [Authentication](#authentication)
 - `AUTO_SYNC_ENABLED` (default `true`) - background sweep that refreshes every connected member's Google busy time on a timer, in addition to the manual "Sync busy time" button
 - `AUTO_SYNC_INTERVAL_MINUTES` (default `15`) - how often the sweep runs
 - `AUTO_SYNC_HORIZON_DAYS` (default `30`) - how far ahead each sweep syncs, matching the manual sync window
-- `ADMIN_RESET_TOKEN` (optional; unset by default) - enables `POST /api/v1/admin/reset-demo` and turns on per-IP rate limiting + a row-count cap on mutating requests. Leave unset for local dev and real deployments; this is only for running a public shared demo like the one linked above. See [Public demo](#public-demo).
+- `ADMIN_RESET_TOKEN` (optional; unset by default) - enables `POST /api/v1/admin/reset-demo` and `GET /api/v1/auth/demo-login`, and turns on per-IP rate limiting + a row-count cap on mutating requests. Leave unset for local dev and real deployments; this is only for running a public shared demo like the one linked above. See [Public demo](#public-demo).
 
 Notes:
 - Get a Gemini API key from Google AI Studio (https://aistudio.google.com/apikey) and set `GEMINI_API_KEY` in `.env`.
-- If Google OAuth env vars are missing, core scheduling still runs, but Google connection/sync/event creation will not.
+- If Google Calendar-connect OAuth env vars are missing, core scheduling still runs, but Google connection/sync/event creation will not.
+- If sign-in env vars (`GOOGLE_CLIENT_ID`/`SECRET`, `GOOGLE_LOGIN_REDIRECT_URI`, `SESSION_SECRET`) are missing, nobody can sign in.
 - The frontend has no build-time or runtime env vars of its own — it always calls the API at a relative `/api/v1/...` path (same-origin in Docker; proxied to `localhost:8000` by Vite in local dev).
+
+## Authentication
+
+Sign-in is Google OAuth ("Sign in with Google"), separate from the Google Calendar *connect* flow described below — same Google Cloud OAuth client, different redirect URI and scopes (`openid email profile` for sign-in vs. calendar scopes for connect).
+
+There's no separate "account" system: signing in resolves to one of the existing `users` rows (team-roster profiles an organizer creates on the Members page), matched by email on first login and by Google's stable account id after that. Anyone whose email isn't on the roster and isn't in `ADMIN_EMAILS` is rejected — this is a private team tool, not open signup.
+
+Two roles:
+- **organizer** - can create/delete members and dances, run and confirm planning, and reschedule/unschedule practices
+- **member** - can view everything and edit their own availability/preferences
+
+An organizer can promote another member via `PATCH /api/v1/users/{id}/role`. The first organizer bootstraps by signing in with an email listed in `ADMIN_EMAILS` (a profile is created automatically if none exists yet).
+
+### Google sign-in setup
+
+Using the same OAuth Client ID as [Google Calendar OAuth setup](#google-calendar-oauth-setup-required-for-connect-google-calendar) below:
+
+1. Add this additional redirect URI to the same OAuth Client ID:
+
+```text
+http://localhost:8000/api/v1/auth/google/callback
+```
+
+2. Add to `.env`:
+
+```env
+GOOGLE_LOGIN_REDIRECT_URI=http://localhost:8000/api/v1/auth/google/callback
+SESSION_SECRET=a-different-long-random-secret
+ADMIN_EMAILS=you@example.com
+```
+
+3. Restart the API after editing `.env`, then sign in with the email you listed in `ADMIN_EMAILS` to bootstrap your organizer account.
 
 ### Google Calendar OAuth setup (required for Connect Google Calendar)
 
@@ -258,10 +299,11 @@ The [live demo](https://ai-scheduler-6pas.onrender.com) is a real deployment (Re
 - **Shared, resettable data.** Anyone can create/edit/delete anything — there's no login. A scheduled job (`.github/workflows/reset-demo.yml`) truncates and reseeds realistic demo data every 4 hours via a token-guarded `POST /api/v1/admin/reset-demo` endpoint (`backend/app/application/services/demo_seed_service.py`). This whole mechanism is a no-op unless `ADMIN_RESET_TOKEN` is explicitly set, so it never affects local dev, tests, or a real deployment.
 - **Rate limiting + a capacity cap.** A per-IP sliding-window rate limit and a total-row-count cap on mutating requests (`backend/app/infrastructure/demo_guard.py`) bound how much a bot or bad actor can spam between resets. It's blunt on purpose — it doesn't try to stop one visitor from seeing another's edits, only how much damage accumulates before the next reset.
 - **Google Calendar connect is optional and shows a warning.** Since this is an unverified personal project, connecting your own Google account there shows Google's standard "unverified app" click-through warning. The demo is fully explorable without it — the seed script pre-populates realistic busy time directly, without going through OAuth.
+- **Sign-in has a one-click bypass.** A real deployment requires Google sign-in (see [Authentication](#authentication)), but asking anonymous visitors to grant a personal Google account to an unverified demo app is a bad ask. `GET /api/v1/auth/demo-login` (only routable when `ADMIN_RESET_TOKEN` is set) logs the visitor in as a shared "Demo Guest" organizer instead — the "Continue as demo guest" button on the sign-in page.
 
 ## Current limitations
 
-- no auth/permissions system yet — see [Public demo](#public-demo) for how the shared deployment copes with that
+- auth is two roles (organizer/member), not per-dance or per-team permissions — an organizer can edit anything for everyone
 - no recurring availability support
 - planning runs are still computed inline, on demand (only Google busy-time sync runs as a background job)
 - Google integration is functional for demo/dev, but not hardened as production OAuth infra, and isn't Google-verified (see [Public demo](#public-demo))

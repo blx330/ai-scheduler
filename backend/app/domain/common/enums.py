@@ -9,3 +9,8 @@ class Weekday(str, Enum):
     FRI = "FRI"
     SAT = "SAT"
     SUN = "SUN"
+
+
+class UserRole(str, Enum):
+    ORGANIZER = "organizer"
+    MEMBER = "member"
