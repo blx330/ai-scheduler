@@ -201,11 +201,7 @@ From repo root:
 docker compose -f infra/compose.yaml up --build
 ```
 
-Then run migrations in the API container (first run, or after new migrations):
-
-```bash
-docker compose -f infra/compose.yaml exec api alembic upgrade head
-```
+The API container runs `alembic upgrade head` on startup before serving, so the schema is always applied automatically — no separate migration step needed.
 
 This uses:
 - Postgres on `5432`
