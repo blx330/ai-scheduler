@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.schemas.events import DanceEventCreate, DanceEventUpdate
 from app.domain.common.datetime_utils import ensure_utc
+from app.domain.common.enums import Weekday
+from app.domain.scheduling.constraints import WEEKDAY_BY_INDEX, DayTimeConstraints
 from app.infrastructure.db.models import DanceEvent, DanceEventParticipant, PracticeSession, User
 
 
@@ -88,6 +90,21 @@ class EventService:
             event.required_session_count = payload.required_session_count
         if payload.status is not None:
             event.status = payload.status
+        if payload.allowed_weekdays is not None:
+            event.allowed_weekdays_json = _ordered_weekday_values(payload.allowed_weekdays)
+        if payload.blocked_weekdays is not None:
+            event.blocked_weekdays_json = _ordered_weekday_values(payload.blocked_weekdays)
+        if "earliest_start_time" in payload.model_fields_set:
+            event.earliest_start_time_local = payload.earliest_start_time
+        if "latest_end_time" in payload.model_fields_set:
+            event.latest_end_time_local = payload.latest_end_time
+        # Validate the merged state: a PATCH setting only the earliest time can still
+        # contradict a latest time saved earlier.
+        try:
+            day_time_constraints_for_event(event)
+        except ValueError:
+            self.db.rollback()
+            raise
 
         if payload.participants is not None:
             normalized_roles = _normalize_participants(payload.participants)
@@ -124,6 +141,21 @@ class EventService:
         existing_users = set(self.db.scalars(select(User.id).where(User.id.in_(user_ids))))
         if existing_users != user_ids:
             raise ValueError("One or more participants do not exist")
+
+
+def day_time_constraints_for_event(event: DanceEvent) -> DayTimeConstraints:
+    """The event's stored organizer rules as a domain object. Raises ValueError if the
+    stored combination is contradictory."""
+    return DayTimeConstraints(
+        allowed_weekdays=frozenset(Weekday(value) for value in event.allowed_weekdays_json or []),
+        blocked_weekdays=frozenset(Weekday(value) for value in event.blocked_weekdays_json or []),
+        earliest_start_local=event.earliest_start_time_local,
+        latest_end_local=event.latest_end_time_local,
+    )
+
+
+def _ordered_weekday_values(days: list[Weekday]) -> list[str]:
+    return [day.value for day in WEEKDAY_BY_INDEX if day in set(days)]
 
 
 def _normalize_participants(participants) -> dict[UUID, str]:

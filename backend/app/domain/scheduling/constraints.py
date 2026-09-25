@@ -40,8 +40,7 @@ class DayTimeConstraints:
     def __post_init__(self) -> None:
         overlap = self.allowed_weekdays & self.blocked_weekdays
         if overlap:
-            days = ", ".join(day.value for day in WEEKDAY_BY_INDEX if day in overlap)
-            raise ValueError(f"Days cannot be both allowed and blocked: {days}")
+            raise ValueError(f"Days cannot be both allowed and blocked: {_days(overlap)}")
         if self.earliest_start_local is not None and self.latest_end_local is not None:
             if _minutes(self.earliest_start_local) >= _end_minutes(self.latest_end_local):
                 raise ValueError(
@@ -74,6 +73,24 @@ class DayTimeConstraints:
         if not contained_in_range(start_minutes, end_minutes, window_start, window_end):
             return "outside_time_window"
         return None
+
+    def violation_message(self, slot: ScheduleSlot, zone: ZoneInfo) -> str | None:
+        """Organizer-facing explanation of why a slot breaks the rules, or None."""
+        reason = self.rejection_reason(slot, zone)
+        if reason is None:
+            return None
+        weekday = WEEKDAY_BY_INDEX[slot.start_at.astimezone(zone).weekday()].value
+        if reason == "blocked_weekday":
+            return f"Slot falls on {weekday}, which this dance blocks"
+        if reason == "weekday_not_allowed":
+            return f"Slot falls on {weekday}, which is not an allowed day for this dance ({_days(self.allowed_weekdays)})"
+        earliest = "00:00" if self.earliest_start_local is None else f"{self.earliest_start_local:%H:%M}"
+        latest = "00:00" if self.latest_end_local is None else f"{self.latest_end_local:%H:%M}"
+        return f"Slot must start at or after {earliest} and end by {latest} in the organizer's timezone"
+
+
+def _days(days: frozenset[Weekday]) -> str:
+    return ", ".join(day.value for day in WEEKDAY_BY_INDEX if day in days)
 
 
 def _minutes(value: time) -> int:

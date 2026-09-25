@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 from sqlalchemy import (
     JSON,
@@ -14,6 +14,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    Time,
     UniqueConstraint,
     text,
 )
@@ -40,6 +41,13 @@ class DanceEvent(Base):
     min_days_apart: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     latest_schedule_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     required_session_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Organizer hard rules, in the organizer's timezone. Weekday values are Weekday
+    # enum values ("MON"...); an empty allowed list means every day is allowed.
+    allowed_weekdays_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    blocked_weekdays_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    earliest_start_time_local: Mapped[time | None] = mapped_column(Time, nullable=True)
+    # 00:00 means midnight at the end of the day.
+    latest_end_time_local: Mapped[time | None] = mapped_column(Time, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="unscheduled")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
