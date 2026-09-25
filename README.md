@@ -23,6 +23,7 @@ Current flow:
 3. Optionally connect Google Calendar — once connected, busy intervals sync automatically on a timer (also syncable on demand)
 4. Create events with required participants (organizer only)
 5. Run planning (`/api/v1/planning-runs`) to get top recommendations (organizer only)
+   - or type a request in plain English on the Calendar page, review the exact rules it turns into, and confirm to plan (organizer only; see [Plain-English scheduling requests](#plain-english-scheduling-requests))
 6. Confirm selected results and optionally create Google Calendar events (organizer only)
 
 The calendar page shows a week grid with per-dance session blocks (drag to reschedule) and a Members panel where each member gets a checkbox and a unique color — toggle a member to show or hide their Google-derived busy time on the grid, labeled with their name.
@@ -32,9 +33,57 @@ Scheduling behavior in this codebase:
 - optional attendees are score modifiers
 - candidate generation is limited to 8:00 AM -> 12:00 AM in organizer local time
 - 12:00 AM -> 8:00 AM is a hard forbidden window
+- an event can also carry organizer hard rules: allowed/blocked weekdays and a daily time window (organizer local time). They filter candidates, fallbacks included, and are re-checked when a session is confirmed with a manual time
+- time of day is scored for student dancers with daytime classes: 6-10 PM (6.0) > 10 PM-12 AM (5.0) > 4-6 PM (3.0) > 8 AM-4 PM (1.0)
 - ranking is deterministic (score, then tie-breakers)
 
+This is feasibility filtering plus weighted ranking, not a constraint solver or an optimizer.
+
 ![Event editor: duration, deadline, spacing constraints, and per-participant required/optional roles](docs/screenshots/event-editor.png)
+
+## Plain-English scheduling requests
+
+An organizer can type a request such as:
+
+> Schedule 3 Hip Hop rehearsals before Oct 20, at least 2 days apart, Maya and Jordan required, no Fridays, Studio B.
+
+and the existing planner schedules it under those rules. The LLM only proposes structure; everything it returns is checked against real data, and nothing changes until the organizer confirms.
+
+1. **Parse** — `POST /api/v1/scheduling-requests/parse` (organizer only). Gemini (temperature 0, JSON mode) is given today's date, the organizer's timezone and the real dance, member and room names, and must return exactly one JSON object matching `SchedulingRequest` (`extra="forbid"`): dance, total session count, earliest/latest date, minimum days apart, required/optional attendees, allowed/blocked weekdays, earliest start/latest end time, room, and `unsupported_phrases` for anything it could not express (e.g. "evenings", "90 minutes each"). The prompt pins down date conventions (e.g. "before Oct 20" means Oct 19 is the last day).
+2. **Ground** — `SchedulingRequestService` resolves names (exact case-insensitive match, then a *unique* first name; never fuzzy), and rejects, listing every problem at once:
+   - unknown or ambiguous dances, members or rooms
+   - past dates, deadlines beyond the 180-day planning horizon, earliest after latest
+   - earliest time not before latest time, a day both allowed and blocked (including against rules already saved on the dance)
+   - spacing that cannot fit the window (e.g. 3 sessions 2 days apart in a 3-day window)
+   - a total below the sessions already confirmed, or no required dancer left
+   - any `unsupported_phrases` — the whole request is rejected rather than half-applied
+3. **Review** — the response shows each rule's old → new value, the resulting dancers (added / role changed), the room, and how many sessions will be planned. Nothing is written.
+4. **Confirm** — `POST /api/v1/scheduling-requests/confirm` takes the reviewed proposal (by id) and **re-runs every check** instead of trusting it, saves the rules on the dance through the normal event update path, and runs the existing planner. No second planner: the rules map onto fields the planner already enforces (`required_session_count`, `earliest_start_date`, `latest_schedule_at`, `min_days_apart`, participants, room) plus the new day/time rules.
+
+Merge semantics: a field the request states overrides the dance's saved value; an unstated field keeps it (null means "not said", never "clear it"). Named dancers are added or have their role changed; nobody is removed. The session count is the dance's total, including confirmed sessions.
+
+Search order for each session: every required dancer present within 8 AM-12 AM, evenings first; only if none exist, a fallback missing exactly one required dancer, flagged and needing a second confirmation. Nothing is ever scheduled after midnight.
+
+Failure modes are loud and write nothing:
+
+| Situation | Response |
+| --- | --- |
+| No `GEMINI_API_KEY` | 503, says the key is missing |
+| Gemini unreachable, overloaded or rate-limited | 502, "try again" |
+| Output isn't a single JSON object or fails the schema | 422 with the offending fields (raw output is logged, never returned) |
+| Output is valid but doesn't match real data | 422 listing every problem |
+
+### Evaluating the parser
+
+`backend/evals/scheduling_requests.jsonl` holds 23 labelled requests against a fixed synthetic roster and a fixed "today" (Fri 2026-09-25, New York): easy cases, relative dates ("next week", "within 2 weeks"), exclusive vs inclusive bounds, shorthand, a misspelled name that must *not* be auto-corrected, an ambiguous first name, unknown dance/room, vague time words, a per-session exception, contradictory times, and a prompt-injection attempt. Two scores are reported: per-field and exact-match parse accuracy, and end-to-end accept/reject accuracy through the real service.
+
+```bash
+cd backend
+python -m scripts.eval_scheduling_parser --oracle                 # replays labels; must be 100% (also run in CI)
+python -m scripts.eval_scheduling_parser --delay 13 --output evals/results/latest.json   # live Gemini
+```
+
+**Live accuracy has not been measured yet.** The first live run was blocked by Gemini free-tier quota (5 requests/minute and 20/day per model, fewer than the 23 cases) and provider overload; the harness aborts instead of scoring outages as misses. Use `--ids` to split a free-tier run across days, or a key with billing enabled.
 
 ## Code structure (actual repo layout)
 
@@ -52,12 +101,13 @@ Scheduling behavior in this codebase:
   - `deps.py` - shared request dependencies (db session, settings, integrations, `get_current_user`/`require_organizer`/`require_self_or_organizer`)
 - `backend/app/application/services/` - use-case orchestration
   - `planning_service.py` - planning run orchestration + confirmation flow
+  - `scheduling_request_service.py` - plain-English requests: grounds parsed output in real events/members/rooms, validates dates, builds the review, and on confirm updates the event and runs the planner
   - `google_calendar_service.py` - Calendar-connect OAuth, sync, event create/delete behavior
   - `auth_service.py` - sign-in OAuth: matches/creates a `users` row from a verified Google identity, issues the session token
   - `user_service.py`, `event_service.py`, `availability_service.py` - domain workflow + persistence coordination
   - `demo_seed_service.py` - seeds/resets realistic demo data for the public shared demo (see [Public demo](#public-demo))
 - `backend/app/domain/` - framework-independent scheduling logic
-  - `scheduling/` - candidate generation, scoring, global planner
+  - `scheduling/` - candidate generation, scoring, global planner, organizer day/time rules (`constraints.py`), the strict `SchedulingRequest` schema (`requests.py`)
   - `availability/` - interval operations and availability semantics
   - `preferences/` - preference models/normalization
   - `common/` - shared domain utilities
@@ -69,8 +119,10 @@ Scheduling behavior in this codebase:
   - `integrations/google_calendar/client.py` - Google Calendar HTTP client (connect flow)
   - `integrations/google_identity/client.py` - Google sign-in HTTP client (login flow; verifies the id_token via Google's tokeninfo endpoint)
   - `integrations/llm/profile_preference_parser.py` - free-text preference parser (stub or Gemini-backed)
+  - `integrations/llm/scheduling_request_parser.py` - Gemini parser for organizer scheduling requests (no stub; fails loudly)
 - `backend/app/static/` - build output only (gitignored); populated by the Docker build from `frontend/dist`, empty otherwise
 - `backend/scripts/seed_demo.py` - CLI entrypoint for `demo_seed_service.py` (`python -m scripts.seed_demo`)
+- `backend/scripts/eval_scheduling_parser.py` + `backend/evals/scheduling_requests.jsonl` - eval harness and labelled cases for request parsing
 
 ### Frontend app
 - `frontend/src/api/` - typed fetch client + TypeScript types matching the backend Pydantic schemas
@@ -88,6 +140,8 @@ Scheduling behavior in this codebase:
 ### Tests
 - `backend/tests/integration/api/` - API integration tests (including `test_auth_api.py` for sign-in, sessions, and role permissions)
 - `backend/tests/unit/domain/` - scheduling and interval unit tests
+- `backend/tests/integration/test_scheduling_request_service.py` - plain-English request grounding/validation against a real SQLite session
+- `backend/tests/unit/test_scheduling_request_eval.py` - keeps the eval labels consistent with the service (oracle must score 100%)
 - `backend/tests/unit/infrastructure/` - integration client unit tests (including the session token signer and the Google identity client)
 - `backend/tests/conftest.py` - shared test setup/fixtures
 - `backend/tests/auth_helpers.py` - mints a session cookie directly (same signer the app uses) so tests can authenticate a `TestClient` without a real Google login round-trip
@@ -116,8 +170,8 @@ DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/scheduler
 Variables currently read by backend settings (`backend/app/infrastructure/config.py`):
 - `DATABASE_URL`
 - `FRONTEND_URL`
-- `GEMINI_API_KEY` (optional; if set, the Gemini-backed preference parser is used via the `google-genai` SDK; if unset, a deterministic stub parser is used instead)
-- `GEMINI_MODEL` (default `gemini-3.6-flash`) - which Gemini model the preference parser calls; only relevant when `GEMINI_API_KEY` is set
+- `GEMINI_API_KEY` (optional; if set, the Gemini-backed preference parser is used via the `google-genai` SDK; if unset, a deterministic stub parser is used instead. Plain-English scheduling requests have no stub: without a key that endpoint returns 503)
+- `GEMINI_MODEL` (default `gemini-3.6-flash`) - which Gemini model both parsers call; only relevant when `GEMINI_API_KEY` is set
 - `OAUTH_STATE_SECRET` (needed for the Google Calendar *connect* OAuth flow)
 - `GOOGLE_CLIENT_ID` (needed for both Google OAuth flows below)
 - `GOOGLE_CLIENT_SECRET` (needed for both Google OAuth flows below)
@@ -278,6 +332,12 @@ PYTHONPYCACHEPREFIX=/tmp/pycache PYTHONPATH=. python -m pytest -q
 ruff check .
 ```
 
+Parser eval (offline; the live variant is described in [Evaluating the parser](#evaluating-the-parser)):
+
+```bash
+python -m scripts.eval_scheduling_parser --oracle
+```
+
 Frontend, from `frontend/`:
 
 ```bash
@@ -304,3 +364,7 @@ The [live demo](https://ai-scheduler-6pas.onrender.com) is a real deployment (Re
 - planning runs are still computed inline, on demand (only Google busy-time sync runs as a background job)
 - Google integration is functional for demo/dev, but not hardened as production OAuth infra, and isn't Google-verified (see [Public demo](#public-demo))
 - the automatic sync sweep assumes a single API process/replica; running multiple API instances would need a lock or an external scheduler to avoid duplicate sweeps
+- plain-English requests can name only rooms that already exist, and there is no rooms API or UI yet — the planner auto-creates a single "Shared Studio", so a request naming "Studio B" is (correctly) rejected until rooms are added to the database
+- plain-English requests edit one existing dance; they can't create a dance, change its duration, or remove dancers (use the Events page)
+- a request is one set of rules for the whole window; per-session exceptions ("Friday is fine for the first one") are rejected as unsupported rather than approximated
+- live parse accuracy is not yet measured (see [Evaluating the parser](#evaluating-the-parser))
