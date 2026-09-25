@@ -16,8 +16,9 @@ fixed synthetic roster below to Google):
     python -m scripts.eval_scheduling_parser [--model gemini-...] [--output evals/results/latest.json]
 
 Gemini's free tier allows 5 requests/minute and 20/day per model, fewer than the
-23 cases: pass --delay 13 to stay under the per-minute limit, and --ids to split
-a run across days (or use a key with billing enabled).
+23 cases: pass --delay 13 to stay under the per-minute limit. If the daily quota
+runs out, the partial report is still written to --output; continue it the next
+day with --resume <that file> (or use a key with billing enabled).
 
 `--oracle` replays the labels instead of calling a model; it must score 100%,
 which is what tests/unit/test_scheduling_request_eval.py checks.
@@ -66,8 +67,8 @@ EVENTS = {
     "Ballet Basics": (2, "Taylor Nguyen"),
 }
 FIELDS = list(SchedulingRequest.model_fields)
-# Provider outages are retried with exponential backoff, then abort the whole run:
-# scoring an outage as a parse miss would understate accuracy.
+# Provider outages are retried with exponential backoff, then the run stops (never
+# scoring an outage as a parse miss); finished cases are kept for --resume.
 UPSTREAM_ATTEMPTS = 5
 
 
@@ -100,6 +101,10 @@ class EvalReport:
     field_accuracy: dict[str, float] = field(default_factory=dict)
     exact_match_accuracy: float = 0.0
     outcome_accuracy: float = 0.0
+    # True when the provider stopped answering mid-run (e.g. daily quota). The
+    # finished results are kept so --resume can complete the run later.
+    incomplete: bool = False
+    stopped_reason: str | None = None
 
 
 def load_cases(path: Path = CASES_PATH) -> list[EvalCase]:
@@ -146,19 +151,35 @@ def run_eval(
     parser: SchedulingRequestParser,
     sleep: Callable[[float], None] = time_module.sleep,
     delay_seconds: float = 0.0,
+    previous: list[CaseResult] | None = None,
 ) -> EvalReport:
-    results = []
-    for index, case in enumerate(cases):
-        if index and delay_seconds:
+    """Run every case not already in `previous`. Accuracy covers finished cases only."""
+    done = {result.id: result for result in previous or []}
+    report = EvalReport(parser=parser.version, results=[])
+    calls = 0
+    for case in cases:
+        if case.id in done:
+            report.results.append(done[case.id])
+            continue
+        if calls and delay_seconds:
             sleep(delay_seconds)
-        results.append(_run_case(case, parser, sleep))
-    report = EvalReport(parser=parser.version, results=results)
-    scored = [(case, result) for case, result in zip(cases, results, strict=True) if _expected_request(case)]
+        calls += 1
+        try:
+            report.results.append(_run_case(case, parser, sleep))
+        except SchedulingRequestUpstreamError as exc:
+            report.incomplete = True
+            report.stopped_reason = f"stopped at case {case.id!r}: {str(exc)[:200]}"
+            break
+
+    by_id = {case.id: case for case in cases}
+    scored = [result for result in report.results if _expected_request(by_id[result.id])]
     for name in FIELDS:
-        correct = sum(1 for _, result in scored if name not in result.wrong_fields)
+        correct = sum(1 for result in scored if name not in result.wrong_fields)
         report.field_accuracy[name] = correct / len(scored) if scored else 0.0
-    report.exact_match_accuracy = sum(result.exact_match for result in results) / len(results)
-    report.outcome_accuracy = sum(result.outcome_correct for result in results) / len(results)
+    finished = report.results
+    if finished:
+        report.exact_match_accuracy = sum(result.exact_match for result in finished) / len(finished)
+        report.outcome_accuracy = sum(result.outcome_correct for result in finished) / len(finished)
     return report
 
 
@@ -246,8 +267,11 @@ def _seeded_session() -> Session:
 
 def format_report(report: EvalReport) -> str:
     n = len(report.results)
-    lines = [
-        f"Parser: {report.parser}  ({n} cases)",
+    lines = [f"Parser: {report.parser}  ({n} cases)"]
+    if report.incomplete:
+        lines.append(f"INCOMPLETE ({report.stopped_reason}); accuracy below covers finished cases only.")
+        lines.append("Re-run with --resume <output file> once the provider is available.")
+    lines += [
         f"Outcome accuracy (accept/reject): {report.outcome_accuracy:.1%} "
         f"({sum(r.outcome_correct for r in report.results)}/{n})",
         f"Exact-match parse accuracy:       {report.exact_match_accuracy:.1%} "
@@ -277,6 +301,7 @@ def main(argv: list[str] | None = None) -> int:
     args.add_argument("--output", type=Path, default=None, help="write the full JSON report here")
     args.add_argument("--delay", type=float, default=0.0, help="seconds to wait between cases (free tier: 13)")
     args.add_argument("--ids", default=None, help="comma-separated case ids to run (default: all)")
+    args.add_argument("--resume", type=Path, default=None, help="JSON report from an incomplete run to continue")
     options = args.parse_args(argv)
 
     cases = load_cases()
@@ -298,17 +323,17 @@ def main(argv: list[str] | None = None) -> int:
         parser = GeminiSchedulingRequestParser(api_key=settings.gemini_api_key, model=model)
         parser.version = f"{parser.version} ({model})"
 
-    try:
-        report = run_eval(cases, parser, delay_seconds=0.0 if options.oracle else options.delay)
-    except SchedulingRequestUpstreamError as exc:
-        print(f"Aborted, no accuracy reported: the model was unavailable after {UPSTREAM_ATTEMPTS} attempts ({exc}).",
-              file=sys.stderr)
-        return 1
+    previous = None
+    if options.resume:
+        previous = [CaseResult(**item) for item in json.loads(options.resume.read_text())["results"]]
+    report = run_eval(
+        cases, parser, delay_seconds=0.0 if options.oracle else options.delay, previous=previous
+    )
     print(format_report(report))
     if options.output:
         options.output.parent.mkdir(parents=True, exist_ok=True)
         options.output.write_text(json.dumps(asdict(report), indent=2, default=str) + "\n")
-    return 0
+    return 1 if report.incomplete else 0
 
 
 if __name__ == "__main__":

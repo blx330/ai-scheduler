@@ -83,7 +83,7 @@ python -m scripts.eval_scheduling_parser --oracle                 # replays labe
 python -m scripts.eval_scheduling_parser --delay 13 --output evals/results/latest.json   # live Gemini
 ```
 
-**Live accuracy has not been measured yet.** The first live run was blocked by Gemini free-tier quota (5 requests/minute and 20/day per model, fewer than the 23 cases) and provider overload; the harness aborts instead of scoring outages as misses. Use `--ids` to split a free-tier run across days, or a key with billing enabled.
+**Live accuracy has not been measured yet.** The first live run was blocked by Gemini free-tier quota (5 requests/minute and 20/day per model, fewer than the 23 cases) and provider overload; the harness stops instead of scoring outages as misses, keeps finished cases in the `--output` file, and continues from it with `--resume evals/results/latest.json`. On the free tier a full run therefore takes two days; with billing enabled it takes about 5 minutes.
 
 ## Code structure (actual repo layout)
 
