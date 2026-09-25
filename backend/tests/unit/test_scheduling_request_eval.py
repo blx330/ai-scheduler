@@ -23,3 +23,38 @@ def test_oracle_scores_perfectly() -> None:
     assert report.exact_match_accuracy == 1.0
     assert report.outcome_accuracy == 1.0
     assert all(value == 1.0 for value in report.field_accuracy.values())
+
+
+class _QuotaAfter:
+    """Answers like the oracle for the first `limit` calls, then acts rate-limited."""
+
+    version = "quota-limited"
+
+    def __init__(self, cases, limit: int) -> None:
+        self.oracle = OracleParser(cases)
+        self.limit = limit
+        self.calls = 0
+
+    def parse(self, text, context):
+        from app.infrastructure.integrations.llm.scheduling_request_parser import SchedulingRequestUpstreamError
+
+        self.calls += 1
+        if self.calls > self.limit:
+            raise SchedulingRequestUpstreamError("429 RESOURCE_EXHAUSTED")
+        return self.oracle.parse(text, context)
+
+
+def test_quota_exhaustion_keeps_finished_cases_and_resume_completes_the_run() -> None:
+    cases = load_cases()
+    first = run_eval(cases, _QuotaAfter(cases, limit=5), sleep=lambda _: None)
+
+    assert first.incomplete
+    assert [result.id for result in first.results] == [case.id for case in cases[:5]]
+
+    second_parser = _QuotaAfter(cases, limit=100)
+    second = run_eval(cases, second_parser, sleep=lambda _: None, previous=first.results)
+
+    assert not second.incomplete
+    assert second_parser.calls == len(cases) - 5
+    assert [result.id for result in second.results] == [case.id for case in cases]
+    assert second.exact_match_accuracy == 1.0
