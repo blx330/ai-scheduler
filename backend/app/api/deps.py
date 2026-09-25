@@ -13,6 +13,7 @@ from app.infrastructure.integrations.llm.profile_preference_parser import (
     UserProfilePreferenceParser,
     build_user_profile_preference_parser,
 )
+from app.infrastructure.integrations.llm.scheduling_request_parser import SchedulingRequestParser
 
 SESSION_COOKIE_NAME = "session"
 
@@ -36,6 +37,10 @@ def get_user_profile_preference_parser(request: Request) -> UserProfilePreferenc
         return parser
     settings = get_settings(request)
     return build_user_profile_preference_parser(api_key=settings.gemini_api_key, model=settings.gemini_model)
+
+
+def get_scheduling_request_parser(request: Request) -> SchedulingRequestParser:
+    return request.app.state.scheduling_request_parser
 
 
 def get_google_calendar_client(request: Request) -> GoogleCalendarProvider:
