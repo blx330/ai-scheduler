@@ -85,6 +85,10 @@ export interface DanceEventRead {
   remaining_session_count: number;
   status: DanceEventStatus;
   participants: DanceEventParticipant[];
+  allowed_weekdays: Weekday[];
+  blocked_weekdays: Weekday[];
+  earliest_start_time: string | null;
+  latest_end_time: string | null;
 }
 
 export interface DanceEventCreate {
@@ -298,7 +302,55 @@ export interface GoogleBusySyncResponse {
 }
 
 export interface ApiErrorBody {
-  detail: string | RescheduleConflictDetail;
+  detail: string | RescheduleConflictDetail | SchedulingRequestErrorDetail;
+}
+
+export type Weekday = "MON" | "TUE" | "WED" | "THU" | "FRI" | "SAT" | "SUN";
+
+export interface SchedulingRequestErrorDetail {
+  message: string;
+  errors: string[];
+}
+
+export interface SchedulingProposal {
+  event_id: string;
+  session_count: number;
+  earliest_date: string | null;
+  latest_date: string;
+  min_days_apart: number;
+  participants: { user_id: string; role: "required" | "optional" }[];
+  allowed_weekdays: Weekday[];
+  blocked_weekdays: Weekday[];
+  earliest_start_time: string | null;
+  latest_end_time: string | null;
+  room_id: string | null;
+}
+
+export interface SchedulingRequestReview {
+  request_text: string;
+  proposal: SchedulingProposal;
+  event: {
+    id: string;
+    name: string;
+    organizer_timezone: string;
+    duration_minutes: number;
+    confirmed_session_count: number;
+  };
+  room: { id: string; name: string } | null;
+  participants: {
+    user_id: string;
+    display_name: string;
+    role: "required" | "optional";
+    change: "added" | "role_changed" | "unchanged";
+  }[];
+  changes: { field: string; label: string; before: string; after: string }[];
+  sessions_to_plan: number;
+  notes: string[];
+}
+
+export interface SchedulingRequestConfirmResponse {
+  event_id: string;
+  planning_run: PlanningRunRead;
 }
 
 export interface HealthRead {
