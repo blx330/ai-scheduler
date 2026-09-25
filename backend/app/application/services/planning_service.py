@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.schemas.planning import PlanningRunCreate
+from app.application.services.event_service import day_time_constraints_for_event
 from app.application.services.google_calendar_service import GoogleCalendarService
 from app.domain.availability.interval_ops import build_effective_availability
 from app.domain.common.datetime_utils import ensure_utc
@@ -26,7 +27,7 @@ from app.domain.scheduling.global_planner import (
     SessionReservation,
     plan_practice_sessions,
 )
-from app.domain.scheduling.models import ParticipantContext
+from app.domain.scheduling.models import ParticipantContext, ScheduleSlot
 from app.infrastructure.db.models import (
     CalendarBusyInterval,
     CalendarConnection,
@@ -657,6 +658,7 @@ class PlanningService:
                         if session.status == "confirmed"
                     ],
                     participants=participant_contexts,
+                    day_time_constraints=day_time_constraints_for_event(event),
                 )
             )
         return event_inputs
@@ -791,6 +793,12 @@ def _validate_event_constraints(
 
     if dance_event.earliest_start_date is not None and local_date < dance_event.earliest_start_date:
         raise ValueError("Selected planning result is before the dance's earliest start date")
+
+    day_time_violation = day_time_constraints_for_event(dance_event).violation_message(
+        ScheduleSlot(start_at=candidate_start, end_at=candidate_end), organizer_zone
+    )
+    if day_time_violation is not None:
+        raise ValueError(f"Confirmed slot breaks this dance's day/time rules: {day_time_violation}")
 
     if dance_event.min_days_apart <= 0:
         return

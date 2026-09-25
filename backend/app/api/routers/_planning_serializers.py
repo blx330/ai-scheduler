@@ -44,6 +44,10 @@ def serialize_event(event: DanceEvent) -> DanceEventRead:
             DanceEventParticipantRead(user_id=participant.user_id, role=participant.role)
             for participant in sorted(event.participants, key=lambda item: (item.role, str(item.user_id)))
         ],
+        allowed_weekdays=list(event.allowed_weekdays_json or []),
+        blocked_weekdays=list(event.blocked_weekdays_json or []),
+        earliest_start_time=event.earliest_start_time_local,
+        latest_end_time=event.latest_end_time_local,
     )
 
 

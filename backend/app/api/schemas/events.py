@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.domain.common.enums import Weekday
 
 
 def _validate_timezone_aware(value: datetime | None) -> datetime | None:
@@ -70,6 +72,10 @@ class DanceEventUpdate(BaseModel):
     required_session_count: int | None = None
     status: str | None = None
     participants: list[DanceEventParticipantCreate] | None = None
+    allowed_weekdays: list[Weekday] | None = None
+    blocked_weekdays: list[Weekday] | None = None
+    earliest_start_time: time | None = None
+    latest_end_time: time | None = None
 
     @field_validator("latest_schedule_at")
     @classmethod
@@ -121,3 +127,7 @@ class DanceEventRead(BaseModel):
     remaining_session_count: int
     status: str
     participants: list[DanceEventParticipantRead] = Field(default_factory=list)
+    allowed_weekdays: list[Weekday] = Field(default_factory=list)
+    blocked_weekdays: list[Weekday] = Field(default_factory=list)
+    earliest_start_time: time | None = None
+    latest_end_time: time | None = None
