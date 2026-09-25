@@ -22,6 +22,9 @@ import type {
   PracticeRescheduleResponse,
   PracticeSessionRead,
   PracticeUnscheduleResponse,
+  SchedulingProposal,
+  SchedulingRequestConfirmResponse,
+  SchedulingRequestReview,
   UserCreate,
   UserRead,
   UserRole,
@@ -93,4 +96,10 @@ export const googleCalendarApi = {
     api.post<GoogleCalendarConnection>(`/users/${userId}/google/calendars/select`, body),
   syncBusy: (userId: string, body: GoogleBusySyncRequest) =>
     api.post<GoogleBusySyncResponse>(`/users/${userId}/google/sync-busy`, body),
+};
+
+export const schedulingRequestsApi = {
+  parse: (text: string) => api.post<SchedulingRequestReview>("/scheduling-requests/parse", { text }),
+  confirm: (proposal: SchedulingProposal) =>
+    api.post<SchedulingRequestConfirmResponse>("/scheduling-requests/confirm", proposal),
 };
