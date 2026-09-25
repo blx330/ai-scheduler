@@ -12,6 +12,7 @@ from app.domain.availability.models import Interval
 from app.domain.common.datetime_utils import ensure_utc
 from app.domain.preferences.models import ParsedPreference
 from app.domain.scheduling.candidate_generation import generate_candidate_starts
+from app.domain.scheduling.constraints import DayTimeConstraints
 from app.domain.scheduling.models import ParticipantContext, ScheduleParticipantStatus, ScheduleSlot
 from app.domain.scheduling.scoring import preference_bonus_for_user, score_slot
 
@@ -45,6 +46,7 @@ class PlanningEventInput:
     pending_session_indices: tuple[int, ...]
     confirmed_session_starts: list[datetime]
     participants: list[ParticipantContext]
+    day_time_constraints: DayTimeConstraints = DayTimeConstraints()
 
     @property
     def sessions_remaining(self) -> int:
@@ -433,6 +435,9 @@ def _build_candidate_options(
         "room_conflict": 0,
         "earliest_start_date": 0,
         "min_days_apart": 0,
+        "blocked_weekday": 0,
+        "weekday_not_allowed": 0,
+        "outside_time_window": 0,
         "before_prior_session": 0,
         "after_later_session": 0,
         "missing_required_over_limit": 0,
@@ -450,6 +455,10 @@ def _build_candidate_options(
         slot_local_date = slot.start_at.astimezone(organizer_zone).date()
         if event.earliest_start_date is not None and slot_local_date < event.earliest_start_date:
             rejection_counts["earliest_start_date"] += 1
+            continue
+        day_time_rejection = event.day_time_constraints.rejection_reason(slot, organizer_zone)
+        if day_time_rejection is not None:
+            rejection_counts[day_time_rejection] += 1
             continue
         if event.min_days_apart > 0 and any(
             abs((slot_local_date - other_date).days) < event.min_days_apart for other_date in same_dance_dates
