@@ -11,13 +11,25 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
-from app.api.routers import admin, auth, availability, events, google_calendar, health, planning, practices, users
+from app.api.routers import (
+    admin,
+    auth,
+    availability,
+    events,
+    google_calendar,
+    health,
+    planning,
+    practices,
+    scheduling_requests,
+    users,
+)
 from app.infrastructure.config import Settings
 from app.infrastructure.db.session import build_session_factory
 from app.infrastructure.demo_guard import DemoGuardMiddleware
 from app.infrastructure.integrations.google_calendar.client import build_google_calendar_client
 from app.infrastructure.integrations.google_identity.client import build_google_identity_client
 from app.infrastructure.integrations.llm.profile_preference_parser import build_user_profile_preference_parser
+from app.infrastructure.integrations.llm.scheduling_request_parser import build_scheduling_request_parser
 from app.infrastructure.scheduling.auto_sync import auto_sync_loop
 
 
@@ -25,6 +37,7 @@ def create_app(
     settings: Settings | None = None,
     session_factory=None,
     user_profile_preference_parser=None,
+    scheduling_request_parser=None,
     google_calendar_client=None,
     google_identity_client=None,
     static_dir: Path | None = None,
@@ -71,6 +84,10 @@ def create_app(
         api_key=app_settings.gemini_api_key,
         model=app_settings.gemini_model,
     )
+    app.state.scheduling_request_parser = scheduling_request_parser or build_scheduling_request_parser(
+        api_key=app_settings.gemini_api_key,
+        model=app_settings.gemini_model,
+    )
     app.state.google_calendar_client = google_calendar_client
     app.state.google_identity_client = google_identity_client
 
@@ -104,6 +121,7 @@ def create_app(
     app.include_router(availability.router, prefix=app_settings.api_prefix)
     app.include_router(events.router, prefix=app_settings.api_prefix)
     app.include_router(planning.router, prefix=app_settings.api_prefix)
+    app.include_router(scheduling_requests.router, prefix=app_settings.api_prefix)
     app.include_router(practices.router, prefix=app_settings.api_prefix)
     app.include_router(google_calendar.router, prefix=app_settings.api_prefix)
     app.include_router(admin.router, prefix=app_settings.api_prefix)

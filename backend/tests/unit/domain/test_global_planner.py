@@ -180,22 +180,14 @@ def test_optional_attendee_is_not_counted_as_free_for_two_events_at_once() -> No
             )
 
 
-def test_late_night_penalty_applies_to_slots_ending_at_midnight() -> None:
-    """Midnight is the latest end the practice window allows, so it must not escape
-    the penalty just because its local hour wraps to 0."""
-    from app.domain.scheduling.global_planner import LATE_NIGHT_PENALTY, _late_night_penalty
-    from app.domain.scheduling.models import ScheduleSlot
+def test_late_evening_slot_is_not_penalized_and_beats_afternoon() -> None:
+    """10 PM-12 AM is a preferred student practice time, so no late-night penalty
+    applies and it outranks an otherwise-identical 4-6 PM slot."""
+    dancer = _participant("required", [Interval(_utc(16), _utc(18)), Interval(_utc(22), _utc(0, day=11))])
+    results = _plan(_event([dancer]), max_results=3)
 
-    def penalty(start_hour: int, duration_minutes: int) -> float:
-        return _late_night_penalty(ScheduleSlot.from_start(_utc(start_hour), duration_minutes), ZONE)
-
-    assert penalty(21, 180) == LATE_NIGHT_PENALTY  # 21:00-00:00
-    assert penalty(20, 240) == LATE_NIGHT_PENALTY  # 20:00-00:00
-    assert penalty(22, 120) == LATE_NIGHT_PENALTY  # 22:00-00:00
-    assert penalty(21, 120) == LATE_NIGHT_PENALTY  # 21:00-23:00
-    # ending exactly at 22:00 is not late night
-    assert penalty(20, 120) == 0.0
-    assert penalty(18, 120) == 0.0
+    assert [_local_hhmm(item.start_at) for item in results] == ["22:00", "22:30", "23:00"]
+    assert all("late_night_penalty" not in item.score_breakdown for item in results)
 
 
 def test_fallback_penalty_scales_with_the_number_of_missing_participants() -> None:
