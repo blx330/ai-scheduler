@@ -153,10 +153,12 @@ Unless explicitly changed, use these scoring rules:
 
 Scoring behavior:
 - preference scoring is cumulative across categories
-- time-tier scoring must strongly prioritize evening practices:
-  - 6:00 PM to 10:00 PM (best)
-  - 4:00 PM to 6:00 PM and 10:00 PM to 12:00 AM
-  - 8:00 AM to 4:00 PM (lowest valid tier)
+- time-tier scoring must strongly prioritize evening practices (dancers are
+  students with daytime classes):
+  - 6:00 PM to 10:00 PM (best, 6.0)
+  - 10:00 PM to 12:00 AM (close second, 5.0; no late-night penalty)
+  - 4:00 PM to 6:00 PM (3.0)
+  - 8:00 AM to 4:00 PM (lowest valid tier, 1.0)
 - cap to one weekday signal and one time-range signal per user
 - tie-breakers:
   1. higher total score

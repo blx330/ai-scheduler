@@ -83,7 +83,7 @@ def test_time_tier_scoring_prioritizes_evening_slots() -> None:
         start_at=datetime(2026, 3, 23, 16, 0, tzinfo=UTC),
         end_at=datetime(2026, 3, 23, 17, 0, tzinfo=UTC),
     )
-    tier_2_slot_late = ScheduleSlot(
+    late_evening_slot = ScheduleSlot(
         start_at=datetime(2026, 3, 23, 22, 0, tzinfo=UTC),
         end_at=datetime(2026, 3, 23, 23, 0, tzinfo=UTC),
     )
@@ -94,8 +94,19 @@ def test_time_tier_scoring_prioritizes_evening_slots() -> None:
 
     assert score_time_tier(tier_1_slot, "UTC") == 6.0
     assert score_time_tier(tier_2_slot_afternoon, "UTC") == 3.0
-    assert score_time_tier(tier_2_slot_late, "UTC") == 3.0
+    assert score_time_tier(late_evening_slot, "UTC") == 5.0
     assert score_time_tier(tier_3_slot, "UTC") == 1.0
+
+
+def test_late_evening_ranks_just_below_prime_evening_and_above_afternoon() -> None:
+    """Students have class during the day, so 10 PM-12 AM is a close second to 6-10 PM
+    and must beat both 4-6 PM and daytime."""
+    prime = score_time_tier(_ny_slot(19, 120), NY)
+    late = score_time_tier(_ny_slot(22, 120), NY)
+    afternoon = score_time_tier(_ny_slot(16, 120), NY)
+    daytime = score_time_tier(_ny_slot(10, 120), NY)
+
+    assert prime > late > afternoon > daytime
 
 
 NY = "America/New_York"

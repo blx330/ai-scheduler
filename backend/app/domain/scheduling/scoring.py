@@ -2,7 +2,6 @@ from zoneinfo import ZoneInfo
 
 from app.domain.availability.interval_ops import interval_covered
 from app.domain.availability.models import Interval
-from app.domain.common.enums import Weekday
 from app.domain.common.time_of_day import (
     contained_in_range,
     overlap_minutes,
@@ -10,6 +9,7 @@ from app.domain.common.time_of_day import (
     slot_minutes,
 )
 from app.domain.preferences.models import ParsedPreference, TimeRangePreference
+from app.domain.scheduling.constraints import WEEKDAY_BY_INDEX
 from app.domain.scheduling.models import (
     ParticipantContext,
     ScheduleParticipantStatus,
@@ -23,29 +23,18 @@ DISALLOWED_WEEKDAY_SCORE = -1.0
 PREFERRED_TIME_RANGE_SCORE = 1.0
 DISALLOWED_TIME_RANGE_SCORE = -1.0
 TIME_TIER_1_SCORE = 6.0
+LATE_EVENING_TIER_SCORE = 5.0
 TIME_TIER_2_SCORE = 3.0
 TIME_TIER_3_SCORE = 1.0
 
 # (start minutes, end minutes, score) in organizer-local time. Anything not covered
-# here scores TIME_TIER_3_SCORE.
+# here scores TIME_TIER_3_SCORE. Dancers are students with daytime classes, so
+# 10 PM-12 AM is a close second to prime evening rather than a penalized slot.
 TIME_TIERS = (
     (18 * 60, 22 * 60, TIME_TIER_1_SCORE),
+    (22 * 60, 24 * 60, LATE_EVENING_TIER_SCORE),
     (16 * 60, 18 * 60, TIME_TIER_2_SCORE),
-    (22 * 60, 24 * 60, TIME_TIER_2_SCORE),
 )
-
-# datetime.weekday() index -> Weekday. strftime("%a") would honour LC_TIME and raise
-# a ValueError under a non-English locale.
-WEEKDAY_BY_INDEX = (
-    Weekday.MON,
-    Weekday.TUE,
-    Weekday.WED,
-    Weekday.THU,
-    Weekday.FRI,
-    Weekday.SAT,
-    Weekday.SUN,
-)
-
 
 def score_slot(slot: ScheduleSlot, participants: list[ParticipantContext], timezone_name: str = "UTC") -> ScheduleResult:
     slot_interval = Interval(slot.start_at, slot.end_at)

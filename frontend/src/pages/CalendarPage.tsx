@@ -11,6 +11,7 @@ import { MembersPanel } from "@/components/calendar/MembersPanel";
 import { WeekGrid } from "@/components/calendar/WeekGrid";
 import { FallbackConfirmDialog, type PendingFallback } from "@/components/calendar/FallbackConfirmDialog";
 import { RescheduleConflictDialog, type PendingReschedule } from "@/components/calendar/RescheduleConflictDialog";
+import { SchedulingRequestPanel } from "@/components/scheduling/SchedulingRequestPanel";
 import { useCurrentUser } from "@/hooks/use-auth";
 import { useBlockDrag } from "@/hooks/use-block-drag";
 import { useCalendarOverview } from "@/hooks/use-calendar";
@@ -219,7 +220,7 @@ export function CalendarPage() {
           setPendingReschedule(null);
         },
         onError: (error) => {
-          if (error instanceof ApiError && error.status === 409 && error.detail && typeof error.detail === "object") {
+          if (error instanceof ApiError && error.status === 409 && typeof error.detail === "object" && "conflict_type" in error.detail) {
             // Keep the drag preview showing the dropped position while the dialog is
             // open, so the block doesn't jump back until the user actually cancels.
             setPendingReschedule({ session, startIso, endIso, conflict: error.detail });
@@ -253,6 +254,22 @@ export function CalendarPage() {
     } catch {
       // useCreatePlanningRun already toasts the error
     }
+  }
+
+  // A plain-English request ran the planner over its whole window, not just this
+  // week: show its suggestions and jump to the week holding the first one.
+  function handleRequestPlanned(run: PlanningRunRead) {
+    setActiveRun(run);
+    setDismissedResultIds(new Set());
+    setCheckedIds((prev) => new Set([...prev, ...run.event_ids]));
+    const starts = run.results.flatMap((group) => group.recommendations.map((rec) => rec.start_at)).sort();
+    if (starts.length === 0) {
+      toast.error("No slot fits these rules. Try a wider date range or fewer restrictions.");
+      return;
+    }
+    setAnchor(new Date(starts[0]));
+    const planned = run.results.filter((group) => group.recommendations.length > 0).length;
+    toast.success(`Found candidate slots for ${planned} session(s)`);
   }
 
   async function handleNewEvent() {
@@ -328,6 +345,7 @@ export function CalendarPage() {
           </button>
         ) : (
           <div className="flex flex-col gap-5 w-72 shrink-0">
+            {isOrganizer ? <SchedulingRequestPanel onPlanned={handleRequestPlanned} /> : null}
             <DancesPanel
               events={events ?? []}
               checkedIds={checkedIds}
