@@ -19,6 +19,7 @@ EXAMPLE = {
     "earliest_start_time": None,
     "latest_end_time": None,
     "room": "Studio B",
+    "unsupported_phrases": [],
 }
 
 
@@ -135,3 +136,9 @@ def test_day_time_constraints_carry_over() -> None:
 
     assert rules.allowed_weekdays == frozenset({Weekday.SAT})
     assert rules.earliest_start_local == time(18, 0)
+
+
+def test_unsupported_phrases_are_kept_for_the_caller_to_reject() -> None:
+    request = _request(unsupported_phrases=["evenings", "90-minute sessions"])
+
+    assert request.unsupported_phrases == ["evenings", "90-minute sessions"]

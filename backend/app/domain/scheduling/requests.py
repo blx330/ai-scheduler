@@ -50,6 +50,10 @@ class SchedulingRequest(BaseModel):
     # 00:00 means midnight at the end of the day.
     latest_end_time: time | None = None
     room: Name | None = None
+    # Parts of the text the parser could not express as a field above (e.g. "evenings",
+    # "90-minute sessions"). Non-empty means the request must be rephrased, never
+    # half-applied.
+    unsupported_phrases: list[Name] = Field(default_factory=list, max_length=20)
 
     @field_validator("allowed_weekdays", "blocked_weekdays", mode="before")
     @classmethod
@@ -68,7 +72,7 @@ class SchedulingRequest(BaseModel):
                 normalized.append(day)
         return [day for day in WEEKDAY_BY_INDEX if day in normalized]
 
-    @field_validator("required_attendees", "optional_attendees", mode="before")
+    @field_validator("required_attendees", "optional_attendees", "unsupported_phrases", mode="before")
     @classmethod
     def null_list_means_unstated(cls, value: object) -> object:
         return [] if value is None else value
