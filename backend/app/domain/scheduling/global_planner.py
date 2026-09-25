@@ -10,14 +10,11 @@ from zoneinfo import ZoneInfo
 from app.domain.availability.interval_ops import subtract_intervals
 from app.domain.availability.models import Interval
 from app.domain.common.datetime_utils import ensure_utc
-from app.domain.common.time_of_day import slot_minutes
 from app.domain.preferences.models import ParsedPreference
 from app.domain.scheduling.candidate_generation import generate_candidate_starts
 from app.domain.scheduling.models import ParticipantContext, ScheduleParticipantStatus, ScheduleSlot
 from app.domain.scheduling.scoring import preference_bonus_for_user, score_slot
 
-LATE_NIGHT_PENALTY = -1.0
-LATE_NIGHT_THRESHOLD_MINUTES = 22 * 60  # 10 PM organizer-local
 SAME_DAY_PRACTICE_PENALTY = -0.35
 BACK_TO_BACK_PENALTY = -0.5
 FALLBACK_MISSING_REQUIRED_PENALTY = -2.5
@@ -678,7 +675,6 @@ def _build_scoring_metadata(
     organizer_preference_bonus = 0.0
     if event.organizer_preference is not None and event.organizer_user_id not in participant_ids:
         organizer_preference_bonus, _ = preference_bonus_for_user(slot, event.organizer_preference, event.organizer_timezone)
-    late_night_penalty = _late_night_penalty(slot, organizer_zone)
     same_day_count = _same_day_reservation_count(slot, relevant_reservations, organizer_zone)
     same_day_penalty = round(same_day_count * SAME_DAY_PRACTICE_PENALTY, 2)
     back_to_back_count = _back_to_back_count(slot, relevant_reservations)
@@ -691,7 +687,6 @@ def _build_scoring_metadata(
         "preference_bonus": round(float(base_score_breakdown.get("preference_bonus", 0.0)), 2),
         "time_tier_bonus": round(float(base_score_breakdown.get("time_tier_bonus", 0.0)), 2),
         "organizer_preference_bonus": round(organizer_preference_bonus, 2),
-        "late_night_penalty": round(late_night_penalty, 2),
         "same_day_penalty": same_day_penalty,
         "back_to_back_penalty": back_to_back_penalty,
         "fallback_penalty": round(fallback_penalty, 2),
@@ -751,14 +746,6 @@ def _build_scoring_metadata(
                 "score": round(score_breakdown["organizer_preference_bonus"], 2),
             }
         )
-    if late_night_penalty:
-        reasons.append(
-            {
-                "code": "late_night_penalty",
-                "message": "This practice ends after 10 PM in the organizer timezone.",
-                "score": round(late_night_penalty, 2),
-            }
-        )
     if same_day_count:
         reasons.append(
             {
@@ -788,18 +775,6 @@ def _build_scoring_metadata(
         "missing_required_user_ids": [str(user_id) for user_id in missing_required_user_ids],
     }
     return score_breakdown, explanation
-
-
-def _late_night_penalty(slot: ScheduleSlot, organizer_zone: ZoneInfo) -> float:
-    """Penalize any practice running past 10 PM local.
-
-    Comparing `local_end.hour` directly missed every slot ending at midnight, whose
-    hour wraps to 0 — i.e. the single latest slot the practice window allows.
-    """
-    local_start = slot.start_at.astimezone(organizer_zone)
-    local_end = slot.end_at.astimezone(organizer_zone)
-    _, end_minutes = slot_minutes(local_start, local_end)
-    return LATE_NIGHT_PENALTY if end_minutes > LATE_NIGHT_THRESHOLD_MINUTES else 0.0
 
 
 def _same_day_reservation_count(
