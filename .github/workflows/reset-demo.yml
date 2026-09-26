@@ -2,9 +2,9 @@ name: Reset public demo
 
 on:
   schedule:
-    # Every 4 hours. Bounds how messy the shared, unauthenticated public demo can
-    # get between resets (see backend/app/infrastructure/demo_guard.py and
-    # backend/app/api/routers/admin.py).
+    # Every 4 hours. Bounds how messy the shared public demo (anyone can sign in as
+    # the guest organizer) can get between resets -- see
+    # backend/app/infrastructure/demo_guard.py and backend/app/api/routers/admin.py.
     - cron: "0 */4 * * *"
   workflow_dispatch: {}
 

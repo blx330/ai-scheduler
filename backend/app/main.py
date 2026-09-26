@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -32,6 +33,8 @@ from app.infrastructure.integrations.google_identity.client import build_google_
 from app.infrastructure.integrations.llm.profile_preference_parser import build_user_profile_preference_parser
 from app.infrastructure.integrations.llm.scheduling_request_parser import build_scheduling_request_parser
 from app.infrastructure.scheduling.auto_sync import auto_sync_loop
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(
@@ -73,7 +76,7 @@ def create_app(
     app = FastAPI(title=app_settings.app_name, lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[app_settings.frontend_url],
+        allow_origins=[app_settings.frontend_url.rstrip("/")],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -107,7 +110,8 @@ def create_app(
         return response
 
     @app.exception_handler(OperationalError)
-    async def handle_operational_error(_: Request, exc: OperationalError) -> JSONResponse:
+    async def handle_operational_error(request: Request, exc: OperationalError) -> JSONResponse:
+        logger.exception("Database unavailable while handling %s %s", request.method, request.url.path, exc_info=exc)
         return JSONResponse(
             status_code=503,
             content={
@@ -116,7 +120,8 @@ def create_app(
         )
 
     @app.exception_handler(ProgrammingError)
-    async def handle_programming_error(_: Request, exc: ProgrammingError) -> JSONResponse:
+    async def handle_programming_error(request: Request, exc: ProgrammingError) -> JSONResponse:
+        logger.exception("Database query failed while handling %s %s", request.method, request.url.path, exc_info=exc)
         detail = "Database query failed."
         if "does not exist" in str(exc).lower():
             detail = "Database schema is not initialized. Run `alembic upgrade head` from the backend directory."
