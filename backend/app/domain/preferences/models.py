@@ -7,6 +7,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.domain.common.enums import Weekday
 
+# Organizer-local bounds of the candidate window the planner generates slots in.
+PRACTICE_WINDOW_START = "08:00"
+PRACTICE_WINDOW_END = "24:00"
+
 
 class TimeRangePreference(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -207,13 +211,13 @@ def cached_practice_preference_to_parsed_preference(
     if not cached_preference.is_useful():
         return None
 
-    window_start = "08:00"
-    window_end = "12:00"
-    preferred_start = _max_time_str(cached_preference.earliest_time or window_start, window_start)
-    preferred_end = _min_time_str(cached_preference.latest_time or window_end, window_end)
-
+    # Clamp to the planner's 8 AM to midnight practice window. An earlier 8 AM to
+    # noon clamp (from a morning-only era) dropped every evening preference.
     preferred_time_ranges: list[dict[str, object]] = []
-    if preferred_start < preferred_end:
+    has_time_preference = cached_preference.earliest_time or cached_preference.latest_time
+    preferred_start = _max_time_str(cached_preference.earliest_time or PRACTICE_WINDOW_START, PRACTICE_WINDOW_START)
+    preferred_end = _min_time_str(cached_preference.latest_time or PRACTICE_WINDOW_END, PRACTICE_WINDOW_END)
+    if has_time_preference and preferred_start < preferred_end:
         preferred_time_ranges.append(
             {
                 "start_local": preferred_start,
