@@ -1,6 +1,7 @@
+from typing import Annotated
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 DEFAULT_DATABASE_URL = "postgresql+psycopg://postgres:postgres@db:5432/scheduler"
 
@@ -31,7 +32,10 @@ class Settings(BaseSettings):
     # Emails that always get (or are upgraded to) the organizer role on login, and may
     # log in even before any matching users row exists -- bootstraps the first
     # organizer, since nobody starts out able to promote anyone.
-    admin_emails: list[str] = Field(default_factory=list, validation_alias="ADMIN_EMAILS")
+    # NoDecode: pydantic-settings would otherwise JSON-decode the raw env value before
+    # the validator below runs, and a blank `ADMIN_EMAILS=` (as .env.example ships)
+    # is not valid JSON.
+    admin_emails: Annotated[list[str], NoDecode] = Field(default_factory=list, validation_alias="ADMIN_EMAILS")
     auto_sync_enabled: bool = True
     auto_sync_interval_minutes: int = 15
     auto_sync_horizon_days: int = 30
