@@ -8,13 +8,31 @@ interface MembersPanelProps {
   visibleMemberIds: Set<string>;
   onToggleVisible: (userId: string, visible: boolean) => void;
   memberColorMap: Map<string, string>;
+  showAvailability: boolean;
+  onToggleShowAvailability: (show: boolean) => void;
 }
 
-export function MembersPanel({ users, visibleMemberIds, onToggleVisible, memberColorMap }: MembersPanelProps) {
+export function MembersPanel({
+  users,
+  visibleMemberIds,
+  onToggleVisible,
+  memberColorMap,
+  showAvailability,
+  onToggleShowAvailability,
+}: MembersPanelProps) {
   return (
     <Card className="p-5">
       <div className="text-base font-bold mb-1">Members</div>
-      <p className="text-xs text-muted-foreground mb-3">Toggle whose busy time shows on the calendar.</p>
+      <p className="text-xs text-muted-foreground mb-3">
+        Toggle whose calendar shows. Shaded blocks are busy time; faint bands are the free time each member declared,
+        which is the only time the planner will book them.
+      </p>
+      <div className="flex items-center gap-2.5 mb-3">
+        <Checkbox id="show-availability" checked={showAvailability} onCheckedChange={(checked) => onToggleShowAvailability(Boolean(checked))} />
+        <Label htmlFor="show-availability" className="text-sm font-normal cursor-pointer">
+          Show declared free time
+        </Label>
+      </div>
 
       <div className="flex flex-col gap-2.5">
         {users.map((member) => {

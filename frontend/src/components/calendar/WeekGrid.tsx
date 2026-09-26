@@ -14,6 +14,7 @@ import {
   gridPlacement,
 } from "@/lib/calendarGrid";
 import { eventColor } from "@/lib/eventColor";
+import { describeUnavailability, missingParticipants } from "@/lib/participantStatus";
 import type {
   CalendarOverviewRead,
   DanceEventRead,
@@ -26,7 +27,10 @@ import type {
 
 function blockTooltip(rec: PlanningRecommendationRead, usersById: Map<string, UserRead>): string {
   const statuses = rec.participant_statuses
-    .map((s) => `${usersById.get(s.user_id)?.display_name ?? s.user_id} (${s.role}): ${s.available ? "available" : "unavailable"}`)
+    .map(
+      (s) =>
+        `${usersById.get(s.user_id)?.display_name ?? s.user_id} (${s.role}): ${s.available ? "available" : describeUnavailability(s)}`,
+    )
     .join("\n");
   const score = Object.entries(rec.score_breakdown)
     .map(([k, v]) => `${k}: ${v.toFixed(2)}`)
@@ -65,6 +69,8 @@ interface WeekGridProps {
   dismissedResultIds: Set<string>;
   dragPreview: DragPreview | null;
   dragGhost: DragGhost | null;
+  /** Draw each visible member's declared free time under their busy time. */
+  showAvailability: boolean;
   editMode: boolean;
   gridRef: RefObject<HTMLDivElement | null>;
   scrollContainerRef: RefObject<HTMLDivElement | null>;
@@ -96,6 +102,7 @@ export function WeekGrid({
   dismissedResultIds,
   dragPreview,
   dragGhost,
+  showAvailability,
   editMode,
   gridRef,
   scrollContainerRef,
@@ -112,6 +119,7 @@ export function WeekGrid({
     const blocks: Array<{
       key: string;
       recId: string;
+      missingLabel: string | null;
       day: number;
       startMin: number;
       durationMin: number;
@@ -131,9 +139,11 @@ export function WeekGrid({
       const preview = dragPreview?.kind === "suggested" && dragPreview.id === rec.id ? dragPreview : null;
       const placement = preview ?? gridPlacement(rec.start_at, dayDateStrings);
       if (!placement) continue;
+      const missingRequired = missingParticipants(rec.participant_statuses, usersById).filter((m) => m.role === "required");
       blocks.push({
         key: `suggested-${rec.id}`,
         recId: rec.id,
+        missingLabel: missingRequired.length ? `missing ${missingRequired.map((m) => m.name.split(" ")[0]).join(", ")}` : null,
         day: placement.day,
         startMin: placement.startMin,
         durationMin: clampDurationToDay(placement.startMin, durationBetween(rec.start_at, rec.end_at)),
@@ -148,6 +158,27 @@ export function WeekGrid({
     }
     return blocks;
   }, [activeRun, dismissedResultIds, dragPreview, dayDateStrings, usersById, eventColorMap]);
+
+  // Declared free time: the only time the planner will ever schedule inside. Drawn
+  // as faint bands so "no busy block here" is not mistaken for "available".
+  const availabilityBlocks = useMemo(() => {
+    if (!showAvailability) return [];
+    const raw: Array<{ key: string; day: number; startMin: number; durationMin: number; label: string; color: string }> = [];
+    for (const interval of overview?.availability_intervals ?? []) {
+      if (!visibleMemberIds.has(interval.user_id)) continue;
+      const placement = gridPlacement(interval.start_at, dayDateStrings);
+      if (!placement) continue;
+      raw.push({
+        key: `free-${interval.id}`,
+        day: placement.day,
+        startMin: placement.startMin,
+        durationMin: clampDurationToDay(placement.startMin, durationBetween(interval.start_at, interval.end_at)),
+        label: `${usersById.get(interval.user_id)?.display_name ?? "Someone"} (free)`,
+        color: memberColorMap.get(interval.user_id) ?? "#e5e7eb",
+      });
+    }
+    return assignLanes(raw);
+  }, [overview, usersById, dayDateStrings, visibleMemberIds, memberColorMap, showAvailability]);
 
   const busyBlocks = useMemo(() => {
     const raw: Array<{ key: string; day: number; startMin: number; durationMin: number; label: string; color: string }> = [];
@@ -249,6 +280,28 @@ export function WeekGrid({
                 "repeating-linear-gradient(to bottom, rgba(0,0,0,0.06) 0, rgba(0,0,0,0.06) 1px, transparent 1px, transparent 72px), repeating-linear-gradient(to right, rgba(0,0,0,0.06) 0, rgba(0,0,0,0.06) 1px, transparent 1px, transparent calc(100% / 7))",
             }}
           >
+            {availabilityBlocks.map((block) => (
+              <CalendarBlock
+                key={block.key}
+                day={block.day}
+                startMin={block.startMin}
+                durationMin={block.durationMin}
+                lane={block.lane}
+                laneCount={block.laneCount}
+                aria-hidden
+                style={{
+                  borderRadius: 6,
+                  borderLeft: `3px dotted ${block.color}`,
+                  background: `${block.color}1a`,
+                  pointerEvents: "none",
+                }}
+              >
+                {block.durationMin * PX_PER_MIN >= 20 && (
+                  <div className="text-[9px] truncate px-1 pt-0.5 text-muted-foreground">{block.label}</div>
+                )}
+              </CalendarBlock>
+            ))}
+
             {/* Google-derived busy time, drawn under the practice blocks so the
                 grid can show why a slot was not offered. */}
             {busyBlocks.map((block) => (
@@ -364,7 +417,11 @@ export function WeekGrid({
                 </div>
                 <div className="text-xs font-bold truncate pr-12">{block.label}</div>
                 <div className="text-[11px] opacity-80 mt-0.5">{block.timeLabel}</div>
-                {block.isFallback && <div className="text-[10px] font-semibold mt-0.5">missing required</div>}
+                {block.isFallback && (
+                  <div className="text-[10px] font-semibold mt-0.5 truncate" title={block.tooltip}>
+                    {block.missingLabel ?? "missing required"}
+                  </div>
+                )}
               </CalendarBlock>
             ))}
 

@@ -32,6 +32,10 @@ const session: PracticeSessionRead = {
     summary: "Recommended practice with all required participants available.",
     reasons: [{ code: "time_tier_bonus", message: "Evening slot.", score: 6, missing_required_user_ids: [] }],
     missing_required_user_ids: [],
+    participant_statuses: [
+      { user_id: "user-9", role: "required", available: false, reason: "not_declared", detail: null },
+      { user_id: "user-1", role: "required", available: true, reason: null, detail: null },
+    ],
   },
 };
 
@@ -68,7 +72,7 @@ describe("SessionEditorDialog", () => {
       "https://calendar.google.com/event?eid=abc",
     );
     expect(screen.getByRole("link", { name: /Edit dance/ })).toHaveAttribute("href", "/events/dance-1");
-    expect(screen.getByText(/Missing required: Nina Kowalski/)).toBeInTheDocument();
+    expect(screen.getByText("Nina Kowalski").closest("li")).toHaveTextContent("hasn't declared availability at this time");
   });
 
   it("saves the edited date and time as instants in the editor's zone, keeping the dance duration", () => {

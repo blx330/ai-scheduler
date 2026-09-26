@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { addMinutesToDateTime } from "@/lib/calendarGrid";
 import { formatTimeRange, isoToZonedParts, localPartsToIso } from "@/lib/datetime";
+import { missingParticipants } from "@/lib/participantStatus";
 import type { DanceEventRead, PracticeSessionRead, UserRead } from "@/api/types";
 
 interface SessionEditorDialogProps {
@@ -75,7 +76,15 @@ export function SessionEditorDialog({
   const endParts = date && startMinute !== null ? addMinutesToDateTime(date, startMinute + durationMin) : null;
   const dirty = Boolean(initial) && (date !== initial?.date || time !== initial?.time);
   const canSave = canEdit && dirty && Boolean(date) && startMinute !== null && !isSaving;
-  const missingNames = session.missing_required_user_ids.map((id) => usersById.get(id)?.display_name ?? "Unknown member");
+  // Sessions saved before statuses were recorded only carry ids; show those without a cause.
+  const missing = session.explanation.participant_statuses.length
+    ? missingParticipants(session.explanation.participant_statuses, usersById).filter((m) => m.role === "required")
+    : session.missing_required_user_ids.map((id) => ({
+        userId: id,
+        name: usersById.get(id)?.display_name ?? "Unknown member",
+        role: "required" as const,
+        why: "unavailable",
+      }));
 
   function handleSave() {
     if (!session || !canSave || !endParts) return;
@@ -137,10 +146,16 @@ export function SessionEditorDialog({
                 {reason.score != null ? ` (${reason.score > 0 ? "+" : ""}${reason.score.toFixed(2)})` : ""}
               </p>
             ))}
-            {missingNames.length > 0 && (
-              <p className="text-destructive">Missing required: {missingNames.join(", ")}</p>
-            )}
           </div>
+        )}
+        {missing.length > 0 && (
+          <ul className="text-xs space-y-0.5">
+            {missing.map((person) => (
+              <li key={person.userId} className="text-destructive">
+                <strong>{person.name}</strong> {person.why}
+              </li>
+            ))}
+          </ul>
         )}
 
         <div className="flex flex-wrap gap-3 text-xs">

@@ -37,6 +37,7 @@ import {
 } from "@/lib/calendarGrid";
 import { buildEventColorMap } from "@/lib/eventColor";
 import { initialVisibleMemberIds } from "@/lib/members";
+import { missingParticipants } from "@/lib/participantStatus";
 import { buildMemberColorMap } from "@/lib/userColor";
 import { localPartsToIso } from "@/lib/datetime";
 import type {
@@ -64,6 +65,7 @@ export function CalendarPage() {
   const [dismissedResultIds, setDismissedResultIds] = useState<Set<string>>(new Set());
   const [pendingFallback, setPendingFallback] = useState<PendingFallback | null>(null);
   const [editMode, setEditMode] = useState(false);
+  const [showAvailability, setShowAvailability] = useState(true);
   const [pendingReschedule, setPendingReschedule] = useState<PendingReschedule | null>(null);
   const [editingSession, setEditingSession] = useState<PracticeSessionRead | null>(null);
   // Describes the block being dragged so the grid can keep drawing it after the
@@ -206,7 +208,7 @@ export function CalendarPage() {
     }
     if (rec.is_fallback) {
       // The drag preview (if any) stays at the drop position while the dialog is open.
-      setPendingFallback({ runId, resultId: rec.id, label, override });
+      setPendingFallback({ runId, resultId: rec.id, label, statuses: rec.participant_statuses, override });
       return;
     }
     submitConfirmation(runId, rec.id, override);
@@ -315,10 +317,17 @@ export function CalendarPage() {
     reschedulePractice.mutate(
       { practiceId: session.id, body: { start_at: startIso, end_at: endIso, override_conflicts: override } },
       {
-        onSuccess: () => {
+        onSuccess: (data) => {
           setDragPreview(null);
           setPendingReschedule(null);
           setEditingSession(null);
+          // The move is saved either way; say who cannot make the new time and why.
+          const missing = missingParticipants(data.practice.explanation.participant_statuses, usersById).filter(
+            (m) => m.role === "required",
+          );
+          if (missing.length) {
+            toast.warning(`Moved, but ${missing.map((m) => `${m.name} ${m.why}`).join("; ")}.`);
+          }
         },
         onError: (error) => {
           if (error instanceof ApiError && error.status === 409 && typeof error.detail === "object" && "conflict_type" in error.detail) {
@@ -492,6 +501,8 @@ export function CalendarPage() {
                 })
               }
               memberColorMap={memberColorMap}
+              showAvailability={showAvailability}
+              onToggleShowAvailability={setShowAvailability}
             />
           </div>
         )}
@@ -520,6 +531,7 @@ export function CalendarPage() {
             dismissedResultIds={dismissedResultIds}
             dragPreview={dragPreview}
             dragGhost={dragGhost}
+            showAvailability={showAvailability}
             editMode={editMode}
             gridRef={gridRef}
             scrollContainerRef={scrollContainerRef}
@@ -546,6 +558,7 @@ export function CalendarPage() {
 
       <FallbackConfirmDialog
         pendingFallback={pendingFallback}
+        usersById={usersById}
         onCancel={() => {
           setPendingFallback(null);
           setDragPreview(null);

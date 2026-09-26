@@ -129,12 +129,20 @@ export interface PlanningExplanation {
   summary: string;
   reasons: PlanningExplanationReason[];
   missing_required_user_ids: string[];
+  /** Per-participant availability for the slot this explanation describes. */
+  participant_statuses: PlanningParticipantStatus[];
 }
+
+/** Why a participant cannot attend; null when available. */
+export type UnavailabilityReason = "booked" | "busy" | "not_declared";
 
 export interface PlanningParticipantStatus {
   user_id: string;
   role: ParticipantRole;
   available: boolean;
+  reason: UnavailabilityReason | null;
+  /** For "booked": the practice they are booked for. */
+  detail: string | null;
 }
 
 export interface PlanningRecommendationRead {
@@ -227,10 +235,19 @@ export interface CalendarBusyInterval {
   end_at: string;
 }
 
+export interface AvailabilityInterval {
+  id: string;
+  user_id: string;
+  start_at: string;
+  end_at: string;
+}
+
 export interface CalendarOverviewRead {
   start_at: string;
   end_at: string;
   busy_intervals: CalendarBusyInterval[];
+  /** Declared free time of the requested members; the planner only schedules inside it. */
+  availability_intervals: AvailabilityInterval[];
   practice_sessions: PracticeSessionRead[];
 }
 
