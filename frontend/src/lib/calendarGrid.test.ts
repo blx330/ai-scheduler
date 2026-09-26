@@ -6,6 +6,7 @@ import {
   assignLanes,
   clampDurationToDay,
   gridPlacement,
+  initialScrollMinute,
   planningHorizonStart,
 } from "./calendarGrid";
 
@@ -124,5 +125,19 @@ describe("assignLanes", () => {
     expect(result).toHaveLength(2);
     expect(result.map((item) => item.key).sort()).toEqual(["a", "b"]);
     expect(result[0]).toMatchObject({ day: 3 });
+  });
+});
+
+describe("initialScrollMinute", () => {
+  it("defaults to 7 AM when the week has no practices", () => {
+    expect(initialScrollMinute([])).toBe(7 * 60);
+  });
+
+  it("opens an hour before the earliest practice of the week", () => {
+    expect(initialScrollMinute([20 * 60, 18 * 60 + 30, 21 * 60])).toBe(17 * 60 + 30);
+  });
+
+  it("never scrolls above 7 AM", () => {
+    expect(initialScrollMinute([7 * 60 + 15])).toBe(7 * 60);
   });
 });

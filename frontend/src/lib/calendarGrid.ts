@@ -116,3 +116,15 @@ export function assignLanes<T extends LaneInput>(blocks: readonly T[]): Array<T 
   }
   return out;
 }
+
+const DEFAULT_SCROLL_MIN = 7 * 60;
+
+/**
+ * Where the week grid opens: an hour before the first practice of the week, so a
+ * team that rehearses in the evenings does not land on empty morning rows, and
+ * never above the 7 AM default when there is nothing to show.
+ */
+export function initialScrollMinute(practiceStartMins: number[]): number {
+  if (practiceStartMins.length === 0) return DEFAULT_SCROLL_MIN;
+  return Math.max(DEFAULT_SCROLL_MIN, Math.min(...practiceStartMins) - 60);
+}

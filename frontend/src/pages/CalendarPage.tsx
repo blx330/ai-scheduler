@@ -19,7 +19,16 @@ import { useEvents } from "@/hooks/use-events";
 import { useConfirmPlanningRun, useCreatePlanningRun, useReschedulePractice } from "@/hooks/use-planning";
 import { useUsers } from "@/hooks/use-users";
 import { errorMessage } from "@/hooks/query-keys";
-import { DAY_END_MIN, DAY_START_MIN, PX_PER_MIN, addMinutesToDateTime, GRID_TIME_ZONE, planningHorizonStart } from "@/lib/calendarGrid";
+import {
+  DAY_END_MIN,
+  DAY_START_MIN,
+  GRID_TIME_ZONE,
+  PX_PER_MIN,
+  addMinutesToDateTime,
+  gridPlacement,
+  initialScrollMinute,
+  planningHorizonStart,
+} from "@/lib/calendarGrid";
 import { buildEventColorMap } from "@/lib/eventColor";
 import { buildMemberColorMap } from "@/lib/userColor";
 import { localPartsToIso } from "@/lib/datetime";
@@ -108,11 +117,6 @@ export function CalendarPage() {
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
   const dayDateStrings = useMemo(() => days.map((d) => format(d, "yyyy-MM-dd")), [days]);
 
-  // Opening on midnight would bury working hours below a wall of empty night
-  // rows, so scroll to ~7 AM by default the way Google Calendar does.
-  useEffect(() => {
-    scrollContainerRef.current?.scrollTo({ top: 7 * 60 * PX_PER_MIN });
-  }, [weekStart]);
 
   // Busy time only for members toggled visible in the Members panel -- that panel
   // is the sole control over whose calendar is fetched/shown, independent of which
@@ -133,6 +137,27 @@ export function CalendarPage() {
   // keepPreviousData leaves the last week on screen during a fetch, so the only cue
   // that new data is on its way is this indicator.
   const showFetching = overviewFetching && overview !== undefined;
+
+  // Opening on midnight would bury working hours below a wall of empty night
+  // rows. Open just above the week's first practice (confirmed or suggested)
+  // instead, falling back to ~7 AM the way Google Calendar does.
+  const firstPracticeMinute = useMemo(() => {
+    const starts: number[] = [];
+    for (const session of overview?.practice_sessions ?? []) {
+      const placement = gridPlacement(session.start_at, dayDateStrings);
+      if (placement) starts.push(placement.startMin);
+    }
+    for (const group of activeRun?.results ?? []) {
+      const rec = group.recommendations.find((item) => item.id && !dismissedResultIds.has(item.id));
+      const placement = rec ? gridPlacement(rec.start_at, dayDateStrings) : null;
+      if (placement) starts.push(placement.startMin);
+    }
+    return initialScrollMinute(starts);
+  }, [overview, activeRun, dismissedResultIds, dayDateStrings]);
+
+  useEffect(() => {
+    scrollContainerRef.current?.scrollTo({ top: firstPracticeMinute * PX_PER_MIN });
+  }, [weekStart, firstPracticeMinute]);
 
   const eventsById = useMemo(() => new Map((events ?? []).map((e) => [e.id, e])), [events]);
   const usersById = useMemo(() => new Map((users ?? []).map((u) => [u.id, u])), [users]);
