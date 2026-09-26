@@ -166,3 +166,85 @@ def test_disallowed_range_is_penalized_for_a_slot_ending_at_midnight() -> None:
 
     assert score == -1.0
     assert signals == 1.0
+
+
+def _slot(start_hour: int, end_hour: int) -> ScheduleSlot:
+    return ScheduleSlot(
+        start_at=datetime(2026, 3, 23, start_hour, 0, tzinfo=UTC),
+        end_at=datetime(2026, 3, 23, end_hour, 0, tzinfo=UTC),
+    )
+
+
+def _interval(start_hour: int, end_hour: int) -> Interval:
+    return Interval(datetime(2026, 3, 23, start_hour, 0, tzinfo=UTC), datetime(2026, 3, 23, end_hour, 0, tzinfo=UTC))
+
+
+def test_unavailable_participant_status_says_why() -> None:
+    """A flag has to name a cause a person can check: busy on their calendar,
+    already booked for another practice, or simply never declared free then."""
+    from app.domain.scheduling.models import BookedInterval
+
+    busy_dancer = ParticipantContext(
+        user_id=uuid4(),
+        role="required",
+        timezone="UTC",
+        effective_availability=[],
+        declared_availability=[_interval(9, 12)],
+        busy_intervals=[_interval(10, 11)],
+    )
+    booked_dancer = ParticipantContext(
+        user_id=uuid4(),
+        role="required",
+        timezone="UTC",
+        effective_availability=[],
+        declared_availability=[_interval(9, 12)],
+        booked_intervals=[BookedInterval(_interval(10, 11), "Hip Hop Set session 2")],
+    )
+    undeclared_dancer = ParticipantContext(
+        user_id=uuid4(),
+        role="required",
+        timezone="UTC",
+        effective_availability=[],
+        declared_availability=[_interval(14, 16)],
+    )
+    free_dancer = ParticipantContext(
+        user_id=uuid4(),
+        role="optional",
+        timezone="UTC",
+        effective_availability=[_interval(9, 12)],
+        declared_availability=[_interval(9, 12)],
+    )
+
+    result = score_slot(_slot(10, 11), [busy_dancer, booked_dancer, undeclared_dancer, free_dancer])
+    by_user = {status.user_id: status for status in result.participant_statuses}
+
+    assert by_user[busy_dancer.user_id].reason == "busy"
+    assert by_user[booked_dancer.user_id].reason == "booked"
+    assert by_user[booked_dancer.user_id].detail == "Hip Hop Set session 2"
+    assert by_user[undeclared_dancer.user_id].reason == "not_declared"
+    assert by_user[free_dancer.user_id].reason is None
+    assert by_user[free_dancer.user_id].model_dump(mode="json") == {
+        "user_id": str(free_dancer.user_id),
+        "role": "optional",
+        "available": True,
+        "reason": None,
+        "detail": None,
+    }
+
+
+def test_booked_outranks_busy_as_the_stated_reason() -> None:
+    """Being booked for another practice is the actionable cause (move that one),
+    so it is reported even when the calendar is also busy at that time."""
+    from app.domain.scheduling.models import BookedInterval
+
+    dancer = ParticipantContext(
+        user_id=uuid4(),
+        role="required",
+        timezone="UTC",
+        effective_availability=[],
+        declared_availability=[_interval(9, 12)],
+        busy_intervals=[_interval(10, 11)],
+        booked_intervals=[BookedInterval(_interval(10, 11), "Showcase session 1")],
+    )
+    [status] = score_slot(_slot(10, 11), [dancer]).participant_statuses
+    assert (status.reason, status.detail) == ("booked", "Showcase session 1")

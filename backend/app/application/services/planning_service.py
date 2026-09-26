@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from types import SimpleNamespace
 from uuid import UUID
 
 from sqlalchemy import false, func, select
@@ -14,6 +14,7 @@ from app.api.schemas.planning import PlanningRunCreate
 from app.application.services.event_service import day_time_constraints_for_event
 from app.application.services.google_calendar_service import GoogleCalendarService
 from app.domain.availability.interval_ops import build_effective_availability
+from app.domain.availability.models import Interval
 from app.domain.common.datetime_utils import ensure_utc
 from app.domain.common.time_of_day import contained_in_range, slot_minutes
 from app.domain.preferences.models import (
@@ -25,9 +26,16 @@ from app.domain.scheduling.global_planner import (
     PRACTICE_WINDOW_START_LOCAL,
     PlanningEventInput,
     SessionReservation,
+    evaluate_slot,
     plan_practice_sessions,
 )
-from app.domain.scheduling.models import ParticipantContext, ScheduleSlot
+from app.domain.scheduling.models import (
+    UNAVAILABLE_BOOKED,
+    ParticipantContext,
+    ScheduleParticipantStatus,
+    ScheduleResult,
+    ScheduleSlot,
+)
 from app.infrastructure.db.models import (
     CalendarBusyInterval,
     CalendarConnection,
@@ -216,7 +224,21 @@ class PlanningService:
                 end_at=effective_end_at,
                 selected_starts=selected_starts_by_event[result.dance_event_id],
             )
-            required_attendees = frozenset(_required_attendee_ids(result))
+            # A manual override means the engine never scored this window, so the
+            # original slot's flags no longer describe it: re-evaluate who can
+            # actually attend at the confirmed time.
+            was_overridden = result.id in manual_time_overrides
+            if was_overridden:
+                evaluation = self.evaluate_window(result.dance_event, effective_start_at, effective_end_at)
+                participant_statuses = evaluation.participant_statuses
+                missing_required_user_ids = _missing_required(participant_statuses)
+                required_attendees = _attendees_for_conflict_check(participant_statuses)
+            else:
+                participant_statuses = [
+                    ScheduleParticipantStatus(**_status_kwargs(item)) for item in result.participant_statuses_json or []
+                ]
+                missing_required_user_ids = [UUID(value) for value in result.missing_required_user_ids_json or []]
+                required_attendees = frozenset(_required_attendee_ids(result))
             if any(
                 reservation.room_id == result.room_id
                 and effective_start_at < reservation.end_at
@@ -241,10 +263,14 @@ class PlanningService:
             if existing_session is not None:
                 raise ValueError("This event session is already confirmed")
 
-            # A manual override means the engine never scored this window, so the
-            # original slot's score and explanation no longer describe it. Store an
-            # honest record instead of copying numbers that describe a different time.
-            was_overridden = result.id in manual_time_overrides
+            # Store an honest record: an overridden time gets no engine score and an
+            # explanation saying it was set by hand, plus the freshly computed statuses.
+            explanation = (
+                _manual_override_explanation(result, missing_required_user_ids)
+                if was_overridden
+                else dict(result.explanation_json or {})
+            )
+            explanation["participant_statuses"] = [status.model_dump(mode="json") for status in participant_statuses]
             practice_session = PracticeSession(
                 dance_event_id=result.dance_event_id,
                 session_index=result.session_index,
@@ -254,14 +280,10 @@ class PlanningService:
                 room_id=result.room_id,
                 source_run_id=run.id,
                 total_score=0.0 if was_overridden else float(result.total_score),
-                is_fallback=result.is_fallback,
-                missing_required_user_ids_json=list(result.missing_required_user_ids_json or []),
+                is_fallback=bool(missing_required_user_ids),
+                missing_required_user_ids_json=[str(user_id) for user_id in missing_required_user_ids],
                 score_breakdown_json={} if was_overridden else dict(result.score_breakdown_json or {}),
-                explanation_json=(
-                    _manual_override_explanation(result)
-                    if was_overridden
-                    else dict(result.explanation_json or {})
-                ),
+                explanation_json=explanation,
             )
             self.db.add(practice_session)
             try:
@@ -373,12 +395,11 @@ class PlanningService:
             exclude_session_id=session.id,
         )
 
-        missing_required = set(session.missing_required_user_ids_json or [])
-        required_attendees = frozenset(
-            participant.user_id
-            for participant in session.dance_event.participants
-            if participant.role == "required" and str(participant.user_id) not in missing_required
-        )
+        # Who can attend at the *new* time. Someone booked for another practice then
+        # is a conflict the organizer must override; someone busy or undeclared is
+        # simply recorded as missing, as the planner would.
+        evaluation = self.evaluate_window(session.dance_event, start_at, end_at, exclude_session_id=session.id)
+        required_attendees = _attendees_for_conflict_check(evaluation.participant_statuses)
         reservations = [
             reservation
             for reservation in self._load_confirmed_reservations(horizon_start=start_at, horizon_end=end_at)
@@ -429,11 +450,14 @@ class PlanningService:
         # to. Keep the session (identity, room, Google event) and record the move
         # honestly instead of carrying a score that describes a different time.
         original_start = ensure_utc(session.start_at)
+        missing_required_user_ids = _missing_required(evaluation.participant_statuses)
         session.start_at = start_at
         session.end_at = end_at
         session.total_score = None
         session.score_breakdown_json = {}
-        session.explanation_json = _manual_reschedule_explanation(session, original_start)
+        session.is_fallback = bool(missing_required_user_ids)
+        session.missing_required_user_ids_json = [str(user_id) for user_id in missing_required_user_ids]
+        session.explanation_json = _manual_reschedule_explanation(session, original_start, evaluation.participant_statuses)
         self.db.add(session)
         self.db.commit()
         self.db.refresh(session)
@@ -473,25 +497,35 @@ class PlanningService:
         horizon_start,
         horizon_end,
         user_ids: list[UUID] | None = None,
-    ) -> tuple[list[CalendarBusyInterval], list[PracticeSession]]:
+    ) -> tuple[list[CalendarBusyInterval], list[ManualAvailabilityInterval], list[PracticeSession]]:
         start_at = ensure_utc(horizon_start)
         end_at = ensure_utc(horizon_end)
         if end_at <= start_at:
             raise ValueError("Calendar overview end must be after start")
 
         # Busy intervals are private calendar data. Without a user filter this returned
-        # every user's Google-derived schedule to any caller.
+        # every user's Google-derived schedule to any caller. Declared availability is
+        # gated the same way so the two overlays always describe the same people.
         busy_statement = (
             select(CalendarBusyInterval)
             .where(CalendarBusyInterval.end_at > start_at)
             .where(CalendarBusyInterval.start_at < end_at)
             .order_by(CalendarBusyInterval.start_at.asc())
         )
+        availability_statement = (
+            select(ManualAvailabilityInterval)
+            .where(ManualAvailabilityInterval.end_at > start_at)
+            .where(ManualAvailabilityInterval.start_at < end_at)
+            .order_by(ManualAvailabilityInterval.start_at.asc())
+        )
         if user_ids:
             busy_statement = busy_statement.where(CalendarBusyInterval.user_id.in_(user_ids))
+            availability_statement = availability_statement.where(ManualAvailabilityInterval.user_id.in_(user_ids))
         else:
             busy_statement = busy_statement.where(false())
+            availability_statement = availability_statement.where(false())
         busy_intervals = list(self.db.scalars(busy_statement))
+        availability_intervals = list(self.db.scalars(availability_statement))
         practice_sessions = list(
             self.db.scalars(
                 select(PracticeSession)
@@ -501,7 +535,39 @@ class PlanningService:
                 .order_by(PracticeSession.start_at.asc())
             )
         )
-        return busy_intervals, practice_sessions
+        return busy_intervals, availability_intervals, practice_sessions
+
+    def evaluate_window(
+        self,
+        dance_event: DanceEvent,
+        start_at: datetime,
+        end_at: datetime,
+        exclude_session_id: UUID | None = None,
+    ) -> ScheduleResult:
+        """Who can attend `dance_event` in [start_at, end_at), judged exactly as the
+        planner judges a candidate: declared free time minus busy time minus other
+        confirmed practices (except `exclude_session_id`, the session being moved)."""
+        start_at = ensure_utc(start_at)
+        end_at = ensure_utc(end_at)
+        participant_user_ids = {participant.user_id for participant in dance_event.participants}
+        users = {user.id: user for user in self.db.scalars(select(User).where(User.id.in_(participant_user_ids)))}
+        sources = self._load_availability_sources(participant_user_ids, start_at, end_at)
+        contexts = [
+            self._participant_context(users[participant.user_id], participant.role, sources, start_at, end_at)
+            for participant in dance_event.participants
+            if participant.user_id in users
+        ]
+        reservations = [
+            reservation
+            for reservation in self._load_confirmed_reservations(horizon_start=start_at, horizon_end=end_at)
+            if reservation.identifier != str(exclude_session_id)
+        ]
+        return evaluate_slot(
+            ScheduleSlot(start_at=start_at, end_at=end_at),
+            contexts,
+            reservations,
+            organizer_timezone=dance_event.organizer.timezone,
+        )
 
     def _load_events(self, event_ids: list[UUID]) -> list[DanceEvent]:
         statement = (
@@ -532,41 +598,7 @@ class PlanningService:
             user.id: user
             for user in self.db.scalars(select(User).where(User.id.in_(all_user_ids)))
         }
-        # A calendar tells us someone is free only for the window it was actually
-        # synced over. Holding a token proves nothing about their schedule.
-        synced_windows_by_user: dict[UUID, list[tuple[datetime, datetime]]] = defaultdict(list)
-        for row in self.db.scalars(
-            select(CalendarConnection)
-            .where(CalendarConnection.user_id.in_(participant_user_ids))
-            .where(CalendarConnection.provider == "google")
-        ):
-            if not (row.refresh_token or row.access_token):
-                continue
-            if row.busy_synced_start_at is None or row.busy_synced_end_at is None:
-                continue
-            synced_windows_by_user[row.user_id].append(
-                (ensure_utc(row.busy_synced_start_at), ensure_utc(row.busy_synced_end_at))
-            )
-
-        manual_by_user = defaultdict(list)
-        for interval in self.db.scalars(
-            select(ManualAvailabilityInterval)
-            .where(ManualAvailabilityInterval.user_id.in_(participant_user_ids))
-            .where(ManualAvailabilityInterval.end_at > horizon_start)
-            .where(ManualAvailabilityInterval.start_at < horizon_end)
-            .order_by(ManualAvailabilityInterval.start_at.asc())
-        ):
-            manual_by_user[interval.user_id].append(interval)
-
-        busy_by_user = defaultdict(list)
-        for interval in self.db.scalars(
-            select(CalendarBusyInterval)
-            .where(CalendarBusyInterval.user_id.in_(participant_user_ids))
-            .where(CalendarBusyInterval.end_at > horizon_start)
-            .where(CalendarBusyInterval.start_at < horizon_end)
-            .order_by(CalendarBusyInterval.start_at.asc())
-        ):
-            busy_by_user[interval.user_id].append(interval)
+        sources = self._load_availability_sources(participant_user_ids, horizon_start, horizon_end)
 
         event_inputs: list[PlanningEventInput] = []
         for event in events:
@@ -576,50 +608,18 @@ class PlanningService:
                 user = users.get(participant.user_id)
                 if user is None:
                     raise ValueError("Event participant user not found")
-                manual_intervals = manual_by_user.get(participant.user_id, [])
-                if not manual_intervals:
-                    # Treat the synced portion of the horizon as available, and leave
-                    # the unsynced remainder unavailable rather than guessing.
-                    manual_intervals = [
-                        SimpleNamespace(start_at=window_start, end_at=window_end)
-                        for window_start, window_end in (
-                            (max(horizon_start, synced_start), min(horizon_end, synced_end))
-                            for synced_start, synced_end in synced_windows_by_user.get(participant.user_id, [])
-                        )
-                        if window_end > window_start
-                    ]
-                effective = build_effective_availability(
-                    manual_intervals=manual_intervals,
-                    busy_intervals=busy_by_user.get(participant.user_id, []),
-                )
+                context = self._participant_context(user, participant.role, sources, horizon_start, horizon_end)
                 logger.info(
-                    "planning participant availability event=%s user=%s role=%s manual_intervals=%s "
+                    "planning participant availability event=%s user=%s role=%s declared_intervals=%s "
                     "busy_intervals=%s effective_intervals=%s",
                     event.id,
                     participant.user_id,
                     participant.role,
-                    len(manual_intervals),
-                    len(busy_by_user.get(participant.user_id, [])),
-                    len(effective),
+                    len(context.declared_availability),
+                    len(context.busy_intervals),
+                    len(context.effective_availability),
                 )
-                merged_preference = merge_preferred_practice_time(
-                    merge_cached_practice_preference(
-                        None,
-                        user.timezone,
-                        user.preferred_practice_time_parsed,
-                    ),
-                    user.timezone,
-                    user.preferred_practice_time,
-                )
-                participant_contexts.append(
-                    ParticipantContext(
-                        user_id=participant.user_id,
-                        role=participant.role,
-                        timezone=user.timezone,
-                        effective_availability=effective,
-                        preference=merged_preference,
-                    )
-                )
+                participant_contexts.append(context)
 
             organizer = users.get(event.organizer_user_id)
             if organizer is None:
@@ -670,6 +670,82 @@ class PlanningService:
             )
         return event_inputs
 
+    def _load_availability_sources(
+        self, user_ids: set[UUID], horizon_start: datetime, horizon_end: datetime
+    ) -> AvailabilitySources:
+        # A calendar tells us someone is free only for the window it was actually
+        # synced over. Holding a token proves nothing about their schedule.
+        synced_windows_by_user: dict[UUID, list[tuple[datetime, datetime]]] = defaultdict(list)
+        for row in self.db.scalars(
+            select(CalendarConnection)
+            .where(CalendarConnection.user_id.in_(user_ids))
+            .where(CalendarConnection.provider == "google")
+        ):
+            if not (row.refresh_token or row.access_token):
+                continue
+            if row.busy_synced_start_at is None or row.busy_synced_end_at is None:
+                continue
+            synced_windows_by_user[row.user_id].append(
+                (ensure_utc(row.busy_synced_start_at), ensure_utc(row.busy_synced_end_at))
+            )
+
+        manual_by_user: dict[UUID, list[Interval]] = defaultdict(list)
+        for interval in self.db.scalars(
+            select(ManualAvailabilityInterval)
+            .where(ManualAvailabilityInterval.user_id.in_(user_ids))
+            .where(ManualAvailabilityInterval.end_at > horizon_start)
+            .where(ManualAvailabilityInterval.start_at < horizon_end)
+            .order_by(ManualAvailabilityInterval.start_at.asc())
+        ):
+            manual_by_user[interval.user_id].append(Interval(ensure_utc(interval.start_at), ensure_utc(interval.end_at)))
+
+        busy_by_user: dict[UUID, list[Interval]] = defaultdict(list)
+        for interval in self.db.scalars(
+            select(CalendarBusyInterval)
+            .where(CalendarBusyInterval.user_id.in_(user_ids))
+            .where(CalendarBusyInterval.end_at > horizon_start)
+            .where(CalendarBusyInterval.start_at < horizon_end)
+            .order_by(CalendarBusyInterval.start_at.asc())
+        ):
+            busy_by_user[interval.user_id].append(Interval(ensure_utc(interval.start_at), ensure_utc(interval.end_at)))
+        return AvailabilitySources(manual_by_user, busy_by_user, synced_windows_by_user)
+
+    def _participant_context(
+        self,
+        user: User,
+        role: str,
+        sources: AvailabilitySources,
+        horizon_start: datetime,
+        horizon_end: datetime,
+    ) -> ParticipantContext:
+        declared = sources.manual_by_user.get(user.id, [])
+        if not declared:
+            # Treat the synced portion of the horizon as available, and leave the
+            # unsynced remainder unavailable rather than guessing.
+            declared = [
+                Interval(window_start, window_end)
+                for window_start, window_end in (
+                    (max(horizon_start, synced_start), min(horizon_end, synced_end))
+                    for synced_start, synced_end in sources.synced_windows_by_user.get(user.id, [])
+                )
+                if window_end > window_start
+            ]
+        busy = sources.busy_by_user.get(user.id, [])
+        merged_preference = merge_preferred_practice_time(
+            merge_cached_practice_preference(None, user.timezone, user.preferred_practice_time_parsed),
+            user.timezone,
+            user.preferred_practice_time,
+        )
+        return ParticipantContext(
+            user_id=user.id,
+            role=role,
+            timezone=user.timezone,
+            effective_availability=build_effective_availability(manual_intervals=declared, busy_intervals=busy),
+            preference=merged_preference,
+            declared_availability=declared,
+            busy_intervals=busy,
+        )
+
     def _load_confirmed_reservations(self, horizon_start, horizon_end) -> list[SessionReservation]:
         sessions = list(
             self.db.scalars(
@@ -705,6 +781,7 @@ class PlanningService:
                     dance_event_id=session.dance_event_id,
                     session_index=session.session_index,
                     attending_user_ids=attending,
+                    label=f"{session.dance_event.name} session {session.session_index}",
                 )
             )
         return reservations
@@ -733,6 +810,38 @@ class PlanningService:
         self.db.add(room)
         self.db.flush()
         return room
+
+
+@dataclass(frozen=True)
+class AvailabilitySources:
+    manual_by_user: dict[UUID, list[Interval]]
+    busy_by_user: dict[UUID, list[Interval]]
+    synced_windows_by_user: dict[UUID, list[tuple[datetime, datetime]]]
+
+
+def _status_kwargs(item: dict) -> dict:
+    return {
+        "user_id": UUID(str(item["user_id"])),
+        "role": item["role"],
+        "available": bool(item["available"]),
+        "reason": item.get("reason"),
+        "detail": item.get("detail"),
+    }
+
+
+def _missing_required(statuses: list[ScheduleParticipantStatus]) -> list[UUID]:
+    return sorted(status.user_id for status in statuses if status.role == "required" and not status.available)
+
+
+def _attendees_for_conflict_check(statuses: list[ScheduleParticipantStatus]) -> frozenset[UUID]:
+    """Required dancers whose presence a conflicting reservation would block: those
+    who can attend, and those unavailable *because* of another practice. Someone
+    busy or undeclared is not double-booked, just absent."""
+    return frozenset(
+        status.user_id
+        for status in statuses
+        if status.role == "required" and (status.available or status.reason == UNAVAILABLE_BOOKED)
+    )
 
 
 def _required_attendee_ids(result: PlanningRunResult) -> list[UUID]:
@@ -830,7 +939,7 @@ def _organizer_zone_for_result(result: PlanningRunResult):
     return _organizer_zone_for_event(result.dance_event)
 
 
-def _manual_override_explanation(result: PlanningRunResult) -> dict:
+def _manual_override_explanation(result: PlanningRunResult, missing_required_user_ids: list[UUID]) -> dict:
     original = ensure_utc(result.start_at).isoformat().replace("+00:00", "Z")
     return {
         "summary": "Time set manually at confirmation, so no engine score applies to this session.",
@@ -840,11 +949,15 @@ def _manual_override_explanation(result: PlanningRunResult) -> dict:
                 "message": f"The organizer moved this session from the recommended {original}.",
             }
         ],
-        "missing_required_user_ids": [str(user_id) for user_id in (result.missing_required_user_ids_json or [])],
+        "missing_required_user_ids": [str(user_id) for user_id in missing_required_user_ids],
     }
 
 
-def _manual_reschedule_explanation(session: PracticeSession, original_start: datetime) -> dict:
+def _manual_reschedule_explanation(
+    session: PracticeSession,
+    original_start: datetime,
+    participant_statuses: list[ScheduleParticipantStatus],
+) -> dict:
     original = original_start.isoformat().replace("+00:00", "Z")
     return {
         "summary": "Moved by the organizer, so no engine score applies to this session.",
@@ -854,7 +967,8 @@ def _manual_reschedule_explanation(session: PracticeSession, original_start: dat
                 "message": f"The organizer moved this session from {original}.",
             }
         ],
-        "missing_required_user_ids": [str(user_id) for user_id in (session.missing_required_user_ids_json or [])],
+        "missing_required_user_ids": list(session.missing_required_user_ids_json or []),
+        "participant_statuses": [status.model_dump(mode="json") for status in participant_statuses],
     }
 
 

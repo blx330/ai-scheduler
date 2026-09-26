@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db, get_google_calendar_client, get_settings, require_organizer
 from app.api.routers._planning_serializers import (
+    serialize_availability_interval,
     serialize_busy_interval,
     serialize_planning_run,
     serialize_practice_session,
@@ -99,7 +100,7 @@ def get_calendar_overview(
     if len(user_ids) > MAX_OVERVIEW_USER_IDS:
         raise HTTPException(status_code=422, detail=f"user_ids: at most {MAX_OVERVIEW_USER_IDS} entries")
     try:
-        busy_intervals, practice_sessions = PlanningService(db).get_calendar_overview(
+        busy_intervals, availability_intervals, practice_sessions = PlanningService(db).get_calendar_overview(
             start, end, user_ids=user_ids
         )
     except ValueError as exc:
@@ -108,5 +109,6 @@ def get_calendar_overview(
         start_at=ensure_utc(start),
         end_at=ensure_utc(end),
         busy_intervals=[serialize_busy_interval(interval) for interval in busy_intervals],
+        availability_intervals=[serialize_availability_interval(interval) for interval in availability_intervals],
         practice_sessions=[serialize_practice_session(session) for session in practice_sessions],
     )

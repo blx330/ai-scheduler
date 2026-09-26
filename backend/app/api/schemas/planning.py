@@ -66,16 +66,21 @@ class PlanningExplanationReasonRead(BaseModel):
     missing_required_user_ids: list[UUID] = Field(default_factory=list)
 
 
-class PlanningExplanationRead(BaseModel):
-    summary: str
-    reasons: list[PlanningExplanationReasonRead] = Field(default_factory=list)
-    missing_required_user_ids: list[UUID] = Field(default_factory=list)
-
-
 class PlanningParticipantStatusRead(BaseModel):
     user_id: UUID
     role: str
     available: bool
+    # Why they cannot attend: "booked" (another practice; `detail` names it),
+    # "busy" (calendar) or "not_declared" (never marked free then). None when available.
+    reason: str | None = None
+    detail: str | None = None
+
+
+class PlanningExplanationRead(BaseModel):
+    summary: str
+    reasons: list[PlanningExplanationReasonRead] = Field(default_factory=list)
+    missing_required_user_ids: list[UUID] = Field(default_factory=list)
+    participant_statuses: list[PlanningParticipantStatusRead] = Field(default_factory=list)
 
 
 class PlanningRecommendationRead(BaseModel):
@@ -213,10 +218,20 @@ class CalendarBusyIntervalRead(BaseModel):
     end_at: datetime
 
 
+class AvailabilityIntervalRead(BaseModel):
+    id: UUID
+    user_id: UUID
+    start_at: datetime
+    end_at: datetime
+
+
 class CalendarOverviewRead(BaseModel):
     start_at: datetime
     end_at: datetime
     busy_intervals: list[CalendarBusyIntervalRead] = Field(default_factory=list)
+    # Declared free time of the requested members: the planner only ever schedules
+    # inside it, so the calendar has to show it next to the busy time.
+    availability_intervals: list[AvailabilityIntervalRead] = Field(default_factory=list)
     practice_sessions: list[PracticeSessionRead] = Field(default_factory=list)
 
 

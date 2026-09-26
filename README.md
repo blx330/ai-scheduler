@@ -29,7 +29,9 @@ Current flow:
 The calendar page shows a week grid with per-dance session blocks (drag to reschedule) and a Members panel where each member gets a checkbox and a unique color — toggle a member to show or hide their Google-derived busy time on the grid, labeled with their name.
 
 Scheduling behavior in this codebase:
-- required attendees are a hard constraint for primary recommendations; if not enough fully-feasible options exist, fallback suggestions may include missing required attendees
+- a member is available at a time only if they declared it as free (manual availability, or the window their Google Calendar was synced over) and nothing on their calendar or another confirmed practice overlaps it. "No busy block" is not "available": the calendar page draws declared free time as faint bands next to busy time for exactly this reason
+- required attendees are a hard constraint for primary recommendations; if not enough fully-feasible options exist, fallback suggestions may include missing required attendees. Every such flag names who and why (`booked` for another practice, `busy` on their calendar, or `not_declared`), on suggestions, in the confirm dialog and on the saved session
+- confirming a suggestion at a dragged time, or moving a confirmed session, re-evaluates who can attend at the new time instead of carrying the flags computed for the original slot
 - for a dance with several sessions, a slot that would leave a later session with nothing but fallback options ranks below any slot that keeps every session fully staffed, and its explanation says so
 - optional attendees are score modifiers
 - candidate generation is limited to 8:00 AM -> 12:00 AM in organizer local time

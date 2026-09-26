@@ -5,6 +5,7 @@ from uuid import UUID
 
 from app.api.schemas.events import DanceEventParticipantRead, DanceEventRead
 from app.api.schemas.planning import (
+    AvailabilityIntervalRead,
     CalendarBusyIntervalRead,
     PlanningExplanationRead,
     PlanningExplanationReasonRead,
@@ -18,6 +19,7 @@ from app.domain.common.datetime_utils import ensure_utc
 from app.infrastructure.db.models import (
     CalendarBusyInterval,
     DanceEvent,
+    ManualAvailabilityInterval,
     PlanningRun,
     PlanningRunResult,
     PracticeSession,
@@ -143,6 +145,18 @@ def _serialize_explanation(explanation_json: dict) -> PlanningExplanationRead:
         summary=explanation_json.get("summary", ""),
         reasons=reasons,
         missing_required_user_ids=[UUID(value) for value in explanation_json.get("missing_required_user_ids", [])],
+        participant_statuses=[
+            PlanningParticipantStatusRead(**item) for item in explanation_json.get("participant_statuses", [])
+        ],
+    )
+
+
+def serialize_availability_interval(interval: ManualAvailabilityInterval) -> AvailabilityIntervalRead:
+    return AvailabilityIntervalRead(
+        id=interval.id,
+        user_id=interval.user_id,
+        start_at=ensure_utc(interval.start_at),
+        end_at=ensure_utc(interval.end_at),
     )
 
 

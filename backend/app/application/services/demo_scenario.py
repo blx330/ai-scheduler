@@ -322,9 +322,10 @@ DANCES: tuple[DanceSpec, ...] = (
         key="runthrough",
         name="Full Run-Through (Tech Week)",
         description=(
-            "Two-hour stumble-through with the whole team. Weekends only; the "
-            "planner will show why Saturdays never work (Jordan) and which Sunday "
-            "window fits everyone."
+            "Two-hour stumble-through with the whole team. Weekends only. Jordan has "
+            "not declared any Saturday availability (no classes, just never marked "
+            "himself free), so Saturdays are only offered as fallbacks that say so; "
+            "Sunday afternoon fits everyone."
         ),
         organizer="cindy",
         duration_minutes=120,

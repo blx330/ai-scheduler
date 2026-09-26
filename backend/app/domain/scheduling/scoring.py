@@ -11,6 +11,9 @@ from app.domain.common.time_of_day import (
 from app.domain.preferences.models import ParsedPreference, TimeRangePreference
 from app.domain.scheduling.constraints import WEEKDAY_BY_INDEX
 from app.domain.scheduling.models import (
+    UNAVAILABLE_BOOKED,
+    UNAVAILABLE_BUSY,
+    UNAVAILABLE_NOT_DECLARED,
     ParticipantContext,
     ScheduleParticipantStatus,
     ScheduleResult,
@@ -46,8 +49,15 @@ def score_slot(slot: ScheduleSlot, participants: list[ParticipantContext], timez
 
     for participant in participants:
         available = interval_covered(slot_interval, participant.effective_availability)
+        reason, detail = (None, None) if available else unavailability_reason(slot_interval, participant)
         participant_statuses.append(
-            ScheduleParticipantStatus(user_id=participant.user_id, role=participant.role, available=available)
+            ScheduleParticipantStatus(
+                user_id=participant.user_id,
+                role=participant.role,
+                available=available,
+                reason=reason,
+                detail=detail,
+            )
         )
         if not available:
             continue
@@ -77,6 +87,22 @@ def score_slot(slot: ScheduleSlot, participants: list[ParticipantContext], timez
         optional_available_count=optional_available_count,
         participant_statuses=participant_statuses,
     )
+
+
+def unavailability_reason(slot: Interval, participant: ParticipantContext) -> tuple[str, str | None]:
+    """Why `participant` cannot attend `slot`, most actionable cause first: another
+    practice they are booked for (move that one), then a calendar busy interval,
+    else they never declared themselves free then."""
+    for booked in participant.booked_intervals:
+        if _overlaps(slot, booked.interval):
+            return UNAVAILABLE_BOOKED, booked.label
+    if any(_overlaps(slot, busy) for busy in participant.busy_intervals):
+        return UNAVAILABLE_BUSY, None
+    return UNAVAILABLE_NOT_DECLARED, None
+
+
+def _overlaps(left: Interval, right: Interval) -> bool:
+    return left.start_at < right.end_at and left.end_at > right.start_at
 
 
 def preference_bonus_for_user(slot: ScheduleSlot, preference: ParsedPreference, timezone_name: str) -> tuple[float, float]:

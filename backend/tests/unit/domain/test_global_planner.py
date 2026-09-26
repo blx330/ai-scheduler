@@ -200,6 +200,7 @@ def test_fallback_penalty_scales_with_the_number_of_missing_participants() -> No
         reservations=[],
         base_score_breakdown={},
         optional_available_count=0,
+        participant_statuses=[],
     )
     from app.domain.scheduling.models import ScheduleSlot
 

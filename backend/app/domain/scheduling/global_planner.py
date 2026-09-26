@@ -13,7 +13,13 @@ from app.domain.common.datetime_utils import ensure_utc
 from app.domain.preferences.models import ParsedPreference
 from app.domain.scheduling.candidate_generation import generate_candidate_starts
 from app.domain.scheduling.constraints import DayTimeConstraints
-from app.domain.scheduling.models import ParticipantContext, ScheduleParticipantStatus, ScheduleSlot
+from app.domain.scheduling.models import (
+    BookedInterval,
+    ParticipantContext,
+    ScheduleParticipantStatus,
+    ScheduleResult,
+    ScheduleSlot,
+)
 from app.domain.scheduling.scoring import preference_bonus_for_user, score_slot
 
 SAME_DAY_PRACTICE_PENALTY = -0.35
@@ -79,6 +85,9 @@ class SessionReservation:
     # Everyone counted as present, optional attendees included. This drives
     # availability subtraction, so nobody is scored as attending two events at once.
     attending_user_ids: frozenset[UUID] = frozenset()
+    # Human-readable name ("Hip Hop Set session 2"), quoted back when this
+    # reservation is why someone cannot attend another slot.
+    label: str | None = None
 
     @property
     def occupied_user_ids(self) -> frozenset[UUID]:
@@ -328,6 +337,7 @@ def _build_candidates(
             base_score_breakdown=option.base_score_breakdown,
             optional_available_count=option.optional_available_count,
             missing_required_user_ids=option.missing_required_user_ids,
+            participant_statuses=option.participant_statuses,
         )
         scored.append(
             PlanningRecommendation(
@@ -639,15 +649,26 @@ def _same_dance_session_bounds(
     return prior_session_end, later_session_start
 
 
+def evaluate_slot(
+    slot: ScheduleSlot,
+    participants: list[ParticipantContext],
+    reservations: list[SessionReservation],
+    organizer_timezone: str,
+) -> ScheduleResult:
+    """Score one slot the way the planner would: participants already booked for a
+    reservation at that time count as unavailable (and say so)."""
+    return score_slot(slot, _adjust_participants_for_reservations(participants, reservations), timezone_name=organizer_timezone)
+
+
 def _adjust_participants_for_reservations(
     participants: list[ParticipantContext],
     reservations: list[SessionReservation],
 ) -> list[ParticipantContext]:
-    participant_adjustments = _participant_reservation_intervals(participants, reservations)
+    participant_bookings = _participant_reservation_intervals(participants, reservations)
     adjusted_participants: list[ParticipantContext] = []
     for participant in participants:
-        reservation_busy = participant_adjustments.get(participant.user_id, [])
-        adjusted_availability = subtract_intervals(participant.effective_availability, reservation_busy)
+        booked = participant_bookings.get(participant.user_id, [])
+        adjusted_availability = subtract_intervals(participant.effective_availability, [item.interval for item in booked])
         adjusted_participants.append(
             ParticipantContext(
                 user_id=participant.user_id,
@@ -655,6 +676,9 @@ def _adjust_participants_for_reservations(
                 timezone=participant.timezone,
                 effective_availability=adjusted_availability,
                 preference=participant.preference,
+                declared_availability=participant.declared_availability,
+                busy_intervals=participant.busy_intervals,
+                booked_intervals=[*participant.booked_intervals, *booked],
             )
         )
     return adjusted_participants
@@ -676,6 +700,7 @@ def _build_session_reservation(
         dance_event_id=event.dance_event_id,
         session_index=session_index,
         attending_user_ids=attending_user_ids,
+        label=f"{event.dance_name} session {session_index} (suggested)",
     )
 
 
@@ -686,15 +711,20 @@ def _remaining_session_indices(event: PlanningEventInput, session_index: int) ->
 def _participant_reservation_intervals(
     participants: list[ParticipantContext],
     reservations: list[SessionReservation],
-) -> dict[UUID, list[Interval]]:
+) -> dict[UUID, list[BookedInterval]]:
     participant_ids = {participant.user_id for participant in participants}
-    intervals: dict[UUID, list[Interval]] = {participant_id: [] for participant_id in participant_ids}
+    bookings: dict[UUID, list[BookedInterval]] = {participant_id: [] for participant_id in participant_ids}
     for reservation in reservations:
         for participant_id in reservation.occupied_user_ids:
             if participant_id not in participant_ids:
                 continue
-            intervals[participant_id].append(Interval(reservation.start_at, reservation.end_at))
-    return intervals
+            bookings[participant_id].append(
+                BookedInterval(
+                    Interval(reservation.start_at, reservation.end_at),
+                    reservation.label or "another practice",
+                )
+            )
+    return bookings
 
 
 def _room_conflict(slot: ScheduleSlot, room_id: UUID, reservations: list[SessionReservation]) -> bool:
@@ -711,6 +741,7 @@ def _build_scoring_metadata(
     base_score_breakdown: dict[str, float],
     optional_available_count: int,
     missing_required_user_ids: list[UUID],
+    participant_statuses: list[ScheduleParticipantStatus],
 ) -> tuple[dict[str, float], dict[str, Any]]:
     organizer_zone = ZoneInfo(event.organizer_timezone)
     relevant_reservations = [
@@ -821,6 +852,8 @@ def _build_scoring_metadata(
         "summary": summary,
         "reasons": reasons,
         "missing_required_user_ids": [str(user_id) for user_id in missing_required_user_ids],
+        # Per person, with the reason they cannot attend, so every flag is checkable.
+        "participant_statuses": [status.model_dump(mode="json") for status in participant_statuses],
     }
     return score_breakdown, explanation
 

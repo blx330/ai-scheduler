@@ -1505,3 +1505,159 @@ def test_calendar_overview_caps_window_and_user_id_count(client) -> None:
         params={"start": "2026-01-01T00:00:00Z", "end": "2026-01-02T00:00:00Z", "user_ids": [str(uuid4()) for _ in range(201)]},
     )
     assert too_many.status_code == 422
+
+
+def _add_busy(app, user_id: str, start_at: str, end_at: str) -> None:
+    from uuid import UUID
+
+    from app.infrastructure.db.models import CalendarBusyInterval
+
+    with app.state.session_factory() as db:
+        db.add(
+            CalendarBusyInterval(
+                user_id=UUID(user_id),
+                calendar_connection_id=None,
+                start_at=datetime.fromisoformat(start_at.replace("Z", "+00:00")),
+                end_at=datetime.fromisoformat(end_at.replace("Z", "+00:00")),
+            )
+        )
+        db.commit()
+
+
+def _two_dancer_event(client, app, *, busy_dancer_b: bool):
+    """A and B both declared 09:00-13:00 free on 2026-04-13; B is also busy 11:00-12:00
+    when asked, so 11:00 is a fallback (missing B, reason busy) and 09:00 is fully feasible."""
+    organizer = _create_user(client, "Coach Reasons", f"coach-reasons-{busy_dancer_b}@example.com")
+    dancer_a = _create_user(client, "Dancer A", f"dancer-a-{busy_dancer_b}@example.com")
+    dancer_b = _create_user(client, "Dancer B", f"dancer-b-{busy_dancer_b}@example.com")
+    for dancer in (dancer_a, dancer_b):
+        _add_availability(client, dancer["id"], "2026-04-13T09:00:00Z", "2026-04-13T13:00:00Z")
+    if busy_dancer_b:
+        _add_busy(app, dancer_b["id"], "2026-04-13T11:00:00Z", "2026-04-13T12:00:00Z")
+    event = _create_event(
+        client,
+        name="Reasons Dance",
+        organizer_user_id=organizer["id"],
+        duration_minutes=60,
+        latest_schedule_at="2026-04-13T13:00:00Z",
+        required_session_count=1,
+        participants=[{"user_id": dancer_a["id"], "role": "required"}, {"user_id": dancer_b["id"], "role": "required"}],
+    )
+    run = _create_planning_run(
+        client, event_ids=[event["id"]], horizon_start="2026-04-13T09:00:00Z", horizon_end="2026-04-13T13:00:00Z"
+    ).json()
+    return event, dancer_a, dancer_b, run
+
+
+def test_recommendation_statuses_say_why_a_participant_is_unavailable(client, app) -> None:
+    _, _, dancer_b, run = _two_dancer_event(client, app, busy_dancer_b=True)
+    recommendations = run["results"][0]["recommendations"]
+    feasible = next(item for item in recommendations if item["start_at"] == "2026-04-13T09:00:00Z")
+    assert feasible["is_fallback"] is False
+    assert all(status["reason"] is None for status in feasible["participant_statuses"])
+    # The busy hour is only offered as a fallback, and the flag names the cause.
+    fallback = next((item for item in recommendations if item["start_at"] == "2026-04-13T11:00:00Z"), None)
+    if fallback is not None:
+        status_b = next(s for s in fallback["participant_statuses"] if s["user_id"] == dancer_b["id"])
+        assert fallback["is_fallback"] is True
+        assert (status_b["available"], status_b["reason"]) == (False, "busy")
+        assert fallback["explanation"]["participant_statuses"] == fallback["participant_statuses"]
+
+
+def test_confirm_override_recomputes_availability_for_the_new_time(client, app) -> None:
+    """The flags describe the time that is actually confirmed, not the slot the
+    suggestion came from."""
+    _, _, dancer_b, run = _two_dancer_event(client, app, busy_dancer_b=True)
+    recommendations = run["results"][0]["recommendations"]
+    feasible = next(item for item in recommendations if item["start_at"] == "2026-04-13T09:00:00Z")
+
+    # Fully feasible suggestion dragged onto B's busy hour: now honestly a fallback.
+    response = client.post(
+        f"/api/v1/planning-runs/{run['id']}/confirm",
+        json={"confirmations": [{"result_id": feasible["id"], "start_at": "2026-04-13T11:00:00Z", "end_at": "2026-04-13T12:00:00Z"}]},
+    )
+    assert response.status_code == 200, response.json()
+    session = response.json()["confirmed_sessions"][0]
+    assert session["is_fallback"] is True
+    assert session["missing_required_user_ids"] == [dancer_b["id"]]
+    status_b = next(s for s in session["explanation"]["participant_statuses"] if s["user_id"] == dancer_b["id"])
+    assert (status_b["available"], status_b["reason"]) == (False, "busy")
+
+
+def test_confirm_override_clears_a_fallback_flag_when_everyone_is_free_at_the_new_time(client, app) -> None:
+    _, _, _, run = _two_dancer_event(client, app, busy_dancer_b=True)
+    recommendations = run["results"][0]["recommendations"]
+    fallback = next((item for item in recommendations if item["is_fallback"]), None)
+    if fallback is None:
+        return  # planner offered enough feasible slots not to need a fallback here
+    response = client.post(
+        f"/api/v1/planning-runs/{run['id']}/confirm",
+        json={"confirmations": [{"result_id": fallback["id"], "start_at": "2026-04-13T09:00:00Z", "end_at": "2026-04-13T10:00:00Z"}]},
+    )
+    assert response.status_code == 200, response.json()
+    session = response.json()["confirmed_sessions"][0]
+    assert session["is_fallback"] is False
+    assert session["missing_required_user_ids"] == []
+
+
+def test_reschedule_recomputes_missing_participants_for_the_new_time(client, app) -> None:
+    _, _, dancer_b, run = _two_dancer_event(client, app, busy_dancer_b=True)
+    feasible = next(item for item in run["results"][0]["recommendations"] if item["start_at"] == "2026-04-13T09:00:00Z")
+    confirmed = client.post(f"/api/v1/planning-runs/{run['id']}/confirm", json={"result_ids": [feasible["id"]]}).json()
+    session = confirmed["confirmed_sessions"][0]
+    assert session["is_fallback"] is False
+
+    moved = client.patch(
+        f"/api/v1/practices/{session['id']}/schedule",
+        json={"start_at": "2026-04-13T11:00:00Z", "end_at": "2026-04-13T12:00:00Z"},
+    )
+    assert moved.status_code == 200, moved.json()
+    practice = moved.json()["practice"]
+    assert practice["is_fallback"] is True
+    assert practice["missing_required_user_ids"] == [dancer_b["id"]]
+    status_b = next(s for s in practice["explanation"]["participant_statuses"] if s["user_id"] == dancer_b["id"])
+    assert status_b["reason"] == "busy"
+
+    # ...and moving it back clears the flag again.
+    back = client.patch(
+        f"/api/v1/practices/{session['id']}/schedule",
+        json={"start_at": "2026-04-13T09:00:00Z", "end_at": "2026-04-13T10:00:00Z"},
+    )
+    assert back.json()["practice"]["is_fallback"] is False
+    assert back.json()["practice"]["missing_required_user_ids"] == []
+
+
+def test_undeclared_time_is_reported_as_not_declared_not_as_a_conflict(client, app) -> None:
+    _, _, dancer_b, run = _two_dancer_event(client, app, busy_dancer_b=False)
+    feasible = run["results"][0]["recommendations"][0]
+    confirmed = client.post(f"/api/v1/planning-runs/{run['id']}/confirm", json={"result_ids": [feasible["id"]]}).json()
+    session = confirmed["confirmed_sessions"][0]
+    # 08:00 is inside the practice window but before either dancer declared free time.
+    moved = client.patch(
+        f"/api/v1/practices/{session['id']}/schedule",
+        json={"start_at": "2026-04-13T08:00:00Z", "end_at": "2026-04-13T09:00:00Z"},
+    )
+    assert moved.status_code == 200, moved.json()
+    statuses = moved.json()["practice"]["explanation"]["participant_statuses"]
+    assert {s["reason"] for s in statuses} == {"not_declared"}
+    assert dancer_b["id"] in moved.json()["practice"]["missing_required_user_ids"]
+
+
+def test_calendar_overview_includes_declared_availability_for_requested_members(client) -> None:
+    dancer = _create_user(client, "Overview Dancer", "overview-dancer@example.com")
+    other = _create_user(client, "Other Dancer", "overview-other@example.com")
+    _add_availability(client, dancer["id"], "2026-04-13T09:00:00Z", "2026-04-13T13:00:00Z")
+    _add_availability(client, other["id"], "2026-04-13T09:00:00Z", "2026-04-13T13:00:00Z")
+
+    response = client.get(
+        "/api/v1/calendar/overview",
+        params={"start": "2026-04-13T00:00:00Z", "end": "2026-04-14T00:00:00Z", "user_ids": [dancer["id"]]},
+    )
+    assert response.status_code == 200
+    intervals = response.json()["availability_intervals"]
+    assert [item["user_id"] for item in intervals] == [dancer["id"]]
+    assert intervals[0]["start_at"] == "2026-04-13T09:00:00Z"
+
+    # Without a member filter nothing personal is returned, same as busy time.
+    unfiltered = client.get("/api/v1/calendar/overview", params={"start": "2026-04-13T00:00:00Z", "end": "2026-04-14T00:00:00Z"})
+    assert unfiltered.json()["availability_intervals"] == []
