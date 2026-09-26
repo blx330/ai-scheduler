@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/blx330/ai-scheduler/actions/workflows/ci.yml/badge.svg)](https://github.com/blx330/ai-scheduler/actions/workflows/ci.yml)
 
-**[Live demo →](https://ai-scheduler-6pas.onrender.com)** — a real deterministic scheduling engine with real Google Calendar sync, seeded with sample data so there's nothing to set up. It's a public shared demo (see [below](#public-demo)) and hosted on a free tier, so the first load can take up to a minute to wake up.
+**[Live demo →](https://ai-scheduler-6pas.onrender.com)** — a real deterministic scheduling engine with real Google Calendar sync, seeded with a student dance team's actual-looking semester (classes, labs, shifts, an exam, a new member with no availability yet) so there's nothing to set up. Click "Continue as demo guest" to sign in as the shared organizer. It's a public shared demo (see [below](#public-demo)) and hosted on a free tier, so the first load can take up to a minute to wake up.
 
 I built this as a backend-first scheduling project to practice real scheduling logic, not just CRUD.
 
@@ -30,6 +30,7 @@ The calendar page shows a week grid with per-dance session blocks (drag to resch
 
 Scheduling behavior in this codebase:
 - required attendees are a hard constraint for primary recommendations; if not enough fully-feasible options exist, fallback suggestions may include missing required attendees
+- for a dance with several sessions, a slot that would leave a later session with nothing but fallback options ranks below any slot that keeps every session fully staffed, and its explanation says so
 - optional attendees are score modifiers
 - candidate generation is limited to 8:00 AM -> 12:00 AM in organizer local time
 - 12:00 AM -> 8:00 AM is a hard forbidden window
@@ -105,7 +106,7 @@ python -m scripts.eval_scheduling_parser --delay 13 --output evals/results/lates
   - `google_calendar_service.py` - Calendar-connect OAuth, sync, event create/delete behavior
   - `auth_service.py` - sign-in OAuth: matches/creates a `users` row from a verified Google identity, issues the session token
   - `user_service.py`, `event_service.py`, `availability_service.py` - domain workflow + persistence coordination
-  - `demo_seed_service.py` - seeds/resets realistic demo data for the public shared demo (see [Public demo](#public-demo))
+  - `demo_seed_service.py` - seeds/resets the public shared demo from the roster and calendar in `demo_scenario.py` (see [Public demo](#public-demo))
 - `backend/app/domain/` - framework-independent scheduling logic
   - `scheduling/` - candidate generation, scoring, global planner, organizer day/time rules (`constraints.py`), the strict `SchedulingRequest` schema (`requests.py`)
   - `availability/` - interval operations and availability semantics
@@ -201,7 +202,7 @@ Two roles:
 - **organizer** - can create/delete members and dances, run and confirm planning, and reschedule/unschedule practices
 - **member** - can view everything and edit their own availability/preferences
 
-An organizer can promote another member via `PATCH /api/v1/users/{id}/role`. The first organizer bootstraps by signing in with an email listed in `ADMIN_EMAILS` (a profile is created automatically if none exists yet).
+An organizer can promote another member via `PATCH /api/v1/users/{id}/role`. The first organizer bootstraps by signing in with an email listed in `ADMIN_EMAILS` (a profile is created automatically if none exists yet). The session cookie only identifies *who* signed in; the role is read from the database on every request, so a demotion or deletion takes effect immediately rather than when the cookie expires.
 
 ### Google sign-in setup
 
@@ -346,23 +347,24 @@ npm run lint
 npm run test -- --run   # Vitest + React Testing Library
 ```
 
-Both run in CI (`.github/workflows/ci.yml`) on every push and PR — see the badge at the top of this file.
+Both run in CI (`.github/workflows/ci.yml`) on every push and PR — see the badge at the top of this file. A third CI job runs the full Alembic migration chain and the demo seed (twice, since resets must be idempotent) against a real Postgres 16 service, which is the only place the Postgres-specific behaviour is exercised before deploy; the test suite itself runs on SQLite.
 
 ## Public demo
 
-The [live demo](https://ai-scheduler-6pas.onrender.com) is a real deployment (Render + Neon Postgres), not a mockup, but it's public and has no auth, so a few things are deliberately different from a normal deployment:
+The [live demo](https://ai-scheduler-6pas.onrender.com) is a real deployment (Render + Neon Postgres), not a mockup, but it's public and everyone shares one guest organizer login, so a few things are deliberately different from a normal deployment:
 
-- **Shared, resettable data.** Anyone can create/edit/delete anything — there's no login. A scheduled job (`.github/workflows/reset-demo.yml`) truncates and reseeds realistic demo data every 4 hours via a token-guarded `POST /api/v1/admin/reset-demo` endpoint (`backend/app/application/services/demo_seed_service.py`). This whole mechanism is a no-op unless `ADMIN_RESET_TOKEN` is explicitly set, so it never affects local dev, tests, or a real deployment.
+- **Shared, resettable data.** Anyone can create/edit/delete anything. A scheduled job (`.github/workflows/reset-demo.yml`) truncates and reseeds the demo every 4 hours via a token-guarded `POST /api/v1/admin/reset-demo` endpoint (`backend/app/application/services/demo_seed_service.py`). The guest organizer is recreated with a fixed id, so a visitor signed in across a reset stays signed in. This whole mechanism is a no-op unless `ADMIN_RESET_TOKEN` is explicitly set, so it never affects local dev, tests, or a real deployment.
+- **What's in the seed** (`backend/app/application/services/demo_scenario.py`). A ten-person Penn dance team in `America/New_York`: recurring classes, labs and work shifts as Google-style busy time for five weeks, declared evening/weekend availability for four, one-off conflicts a few days out (a lab exam, an interview, a midterm), and free-text preferences ("Weekends are best, not before 7pm") parsed by the offline stub. Four dances cover every state the UI has: a three-session showcase with "no Fridays, out by 10:30 PM" rules (one session confirmed), a two-session hip hop set that may not start before 6 PM (fully scheduled), a weekends-only full run-through (unscheduled, only Sundays work), and a feature for a new member who hasn't entered availability yet, so the planner can only offer flagged fallbacks. Every reset re-runs the planner and confirms the top picks, so what you see is what the engine actually computed. The seed is exercised by `backend/tests/integration/test_demo_seed.py` and, in CI, against Postgres.
 - **Rate limiting + a capacity cap.** A per-IP sliding-window rate limit and a total-row-count cap on mutating requests (`backend/app/infrastructure/demo_guard.py`) bound how much a bot or bad actor can spam between resets. It's blunt on purpose — it doesn't try to stop one visitor from seeing another's edits, only how much damage accumulates before the next reset.
 - **Google Calendar connect is optional and shows a warning.** Since this is an unverified personal project, connecting your own Google account there shows Google's standard "unverified app" click-through warning. The demo is fully explorable without it — the seed script pre-populates realistic busy time directly, without going through OAuth.
-- **Sign-in has a one-click bypass.** A real deployment requires Google sign-in (see [Authentication](#authentication)), but asking anonymous visitors to grant a personal Google account to an unverified demo app is a bad ask. `GET /api/v1/auth/demo-login` (only routable when `ADMIN_RESET_TOKEN` is set) logs the visitor in as a shared "Demo Guest" organizer instead — the "Continue as demo guest" button on the sign-in page.
+- **Sign-in has a one-click bypass.** A real deployment requires Google sign-in (see [Authentication](#authentication)), but asking anonymous visitors to grant a personal Google account to an unverified demo app is a bad ask. `GET /api/v1/auth/demo-login` (only routable when `ADMIN_RESET_TOKEN` is set) logs the visitor in as the shared "Demo Guest" organizer instead — the "Continue as demo guest" button on the sign-in page.
 
 ## Current limitations
 
 - auth is two roles (organizer/member), not per-dance or per-team permissions — an organizer can edit anything for everyone
 - no recurring availability support
 - planning runs are still computed inline, on demand (only Google busy-time sync runs as a background job)
-- Google integration is functional for demo/dev, but not hardened as production OAuth infra, and isn't Google-verified (see [Public demo](#public-demo))
+- Google integration is functional for demo/dev, but not hardened as production OAuth infra, and isn't Google-verified (see [Public demo](#public-demo)); Google refresh tokens are stored in plaintext in Postgres, so the database is as sensitive as the calendars behind it
 - the automatic sync sweep assumes a single API process/replica; running multiple API instances would need a lock or an external scheduler to avoid duplicate sweeps
 - plain-English requests can name only rooms that already exist, and there is no rooms API or UI yet — the planner auto-creates a single "Shared Studio", so a request naming "Studio B" is (correctly) rejected until rooms are added to the database
 - plain-English requests edit one existing dance; they can't create a dance, change its duration, or remove dancers (use the Events page)

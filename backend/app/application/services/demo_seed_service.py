@@ -1,31 +1,48 @@
-"""Seed (or reset-and-reseed) realistic demo data for the public shared demo.
+"""Seed (or reset-and-reseed) the public shared demo.
 
 reset_demo() truncates every domain table (FK-safe order) and reseeds from scratch,
 so this module doubles as both the initial seed and the periodic demo-reset job
-(see the "POST /api/v1/admin/reset-demo" endpoint and the scheduled GitHub Actions
-workflow that calls it). Everything here goes through the same service-layer calls
-the real API uses -- create_user/create_interval/create_event/create_planning_run --
-so seeded rows are exactly as internally consistent as data created through the UI.
+(see "POST /api/v1/admin/reset-demo" and the scheduled GitHub Actions workflow
+that calls it). The roster, class schedules and dances live in demo_scenario.py;
+this module only turns them into rows, going through the same service-layer calls
+the real API uses (create_user / create_interval / create_event / update_event /
+create_planning_run / confirm_results) so seeded data is exactly as internally
+consistent as data created through the UI.
 
 Run directly with: python -m scripts.seed_demo (see backend/scripts/seed_demo.py).
 """
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.api.schemas.availability import AvailabilityCreate
-from app.api.schemas.events import DanceEventCreate, DanceEventParticipantCreate
+from app.api.schemas.events import DanceEventCreate, DanceEventParticipantCreate, DanceEventUpdate
 from app.api.schemas.planning import PlanningRunCreate
 from app.api.schemas.users import UserCreate
+from app.application.services.auth_service import DEMO_GUEST_EMAIL, DEMO_GUEST_USER_ID
 from app.application.services.availability_service import AvailabilityService
+from app.application.services.demo_scenario import (
+    AVAILABILITY_WEEKS,
+    BUSY_WEEKS,
+    DANCES,
+    DEMO_TIMEZONE,
+    MEMBERS,
+    PLANNING_HORIZON_DAYS,
+    ROOM_NAME,
+    one_off_block_intervals,
+    weekly_block_intervals,
+)
 from app.application.services.event_service import EventService
 from app.application.services.planning_service import PlanningService
 from app.application.services.user_service import UserService
-from app.domain.preferences.models import PreferredPracticeTime
+from app.domain.availability.models import Interval
+from app.domain.common.enums import UserRole
+from app.domain.scheduling.constraints import WEEKDAY_BY_INDEX
 from app.infrastructure.db.models import (
     CalendarBusyInterval,
     CalendarConnection,
@@ -38,33 +55,7 @@ from app.infrastructure.db.models import (
     Room,
     User,
 )
-
-DEMO_MEMBERS = [
-    {
-        "display_name": "Alice Kim",
-        "timezone": "America/New_York",
-        "email": "alice@demo.aischeduler.dev",
-        "preferred_practice_time": PreferredPracticeTime.MORNING,
-    },
-    {
-        "display_name": "Bilal Osei",
-        "timezone": "America/Chicago",
-        "email": "bilal@demo.aischeduler.dev",
-        "preferred_practice_time": PreferredPracticeTime.AFTERNOON,
-    },
-    {
-        "display_name": "Carmen Ruiz",
-        "timezone": "America/Los_Angeles",
-        "email": "carmen@demo.aischeduler.dev",
-        "preferred_practice_time": PreferredPracticeTime.EVENING,
-    },
-    {
-        "display_name": "Dev Patel",
-        "timezone": "America/New_York",
-        "email": "dev@demo.aischeduler.dev",
-        "preferred_practice_time": None,
-    },
-]
+from app.infrastructure.integrations.llm.profile_preference_parser import StubUserProfilePreferenceParser
 
 # Deletion order matters even though the FKs cascade: sqlite (used by CI) doesn't
 # enforce ON DELETE CASCADE by default, so children must go before their parents.
@@ -82,134 +73,206 @@ _TABLES_CHILD_TO_PARENT = [
 ]
 
 
+def reset_demo(db: Session) -> None:
+    """Wipe all domain data and reseed. Used for both the initial seed and demo resets."""
+    _truncate_all(db)
+    zone = ZoneInfo(DEMO_TIMEZONE)
+    now = datetime.now(UTC)
+    today = now.astimezone(zone).date()
+    week_start = today - timedelta(days=today.weekday())
+
+    _seed_demo_guest(db)
+    users = _seed_members(db)
+    _seed_room(db)
+    _seed_availability(db, users, week_start, zone)
+    _seed_busy_intervals(db, users, week_start, today, zone)
+    events = _seed_dances(db, users, today, zone)
+    _seed_held_sessions(db, events, week_start, zone)
+    _seed_planning_run_and_confirmations(db, events, now)
+
+
 def _truncate_all(db: Session) -> None:
     for model in _TABLES_CHILD_TO_PARENT:
         db.execute(delete(model))
     db.commit()
 
 
-def _seed_members(db: Session) -> list[User]:
-    service = UserService(db)
-    return [
-        service.create_user(
-            UserCreate(
-                display_name=spec["display_name"],
-                timezone=spec["timezone"],
-                email=spec["email"],
-                preferred_practice_time=spec["preferred_practice_time"],
-            )
+def _seed_demo_guest(db: Session) -> None:
+    # Recreated with the same id every reset so a visitor signed in as the guest
+    # keeps a valid session across the 4-hourly reset instead of being logged out.
+    db.add(
+        User(
+            id=DEMO_GUEST_USER_ID,
+            display_name="Demo Guest",
+            email=DEMO_GUEST_EMAIL,
+            timezone=DEMO_TIMEZONE,
+            role=UserRole.ORGANIZER.value,
         )
-        for spec in DEMO_MEMBERS
-    ]
-
-
-def _seed_availability(db: Session, users: list[User], today: date) -> None:
-    service = AvailabilityService(db)
-    for offset, user in enumerate(users):
-        for day_offset in range(0, 14, 2):
-            day = today + timedelta(days=day_offset)
-            start_hour = 17 + (offset % 3)
-            start = datetime.combine(day, datetime.min.time(), tzinfo=UTC) + timedelta(hours=start_hour)
-            end = start + timedelta(hours=2)
-            service.create_interval(user.id, AvailabilityCreate(start_at=start, end_at=end))
-
-
-def _seed_busy_intervals(db: Session, users: list[User], today: date) -> None:
-    # Synthetic busy time simulating a synced Google Calendar, without any real OAuth
-    # connection -- calendar_connection_id is nullable, so these render on the
-    # calendar's per-member overlay exactly like real synced busy time would, letting
-    # the demo look "already connected" without anyone touching Google OAuth.
-    for offset, user in enumerate(users):
-        for day_offset in range(1, 12, 3):
-            day = today + timedelta(days=day_offset)
-            start_hour = 9 + offset
-            start = datetime.combine(day, datetime.min.time(), tzinfo=UTC) + timedelta(hours=start_hour)
-            end = start + timedelta(hours=1, minutes=30)
-            db.add(CalendarBusyInterval(user_id=user.id, calendar_connection_id=None, start_at=start, end_at=end))
+    )
     db.commit()
 
 
-def _seed_events(db: Session, users: list[User], today: date) -> list[DanceEvent]:
+def _seed_members(db: Session) -> dict[str, User]:
+    service = UserService(db)
+    # The stub parser is deterministic and offline, so resets never call Gemini and
+    # every member's free-text preference is understood the same way each time.
+    parser = StubUserProfilePreferenceParser()
+    users: dict[str, User] = {}
+    for spec in MEMBERS:
+        user = service.create_user(
+            UserCreate(
+                display_name=spec.display_name,
+                timezone=DEMO_TIMEZONE,
+                email=spec.email,
+                preferred_practice_time=spec.preferred_practice_time,
+                preferred_practice_time_raw=spec.preferred_practice_time_raw,
+            ),
+            preference_parser=parser,
+        )
+        if spec.role is not UserRole.MEMBER:
+            service.update_role(user.id, spec.role.value)
+        users[spec.key] = user
+    return users
+
+
+def _seed_room(db: Session) -> None:
+    db.add(Room(name=ROOM_NAME, is_active=True))
+    db.commit()
+
+
+def _seed_availability(db: Session, users: dict[str, User], week_start: date, zone: ZoneInfo) -> None:
+    service = AvailabilityService(db)
+    for spec in MEMBERS:
+        for interval in _weekly_intervals(spec.weekly_free, week_start, AVAILABILITY_WEEKS, zone):
+            service.create_interval(users[spec.key].id, AvailabilityCreate(start_at=interval.start_at, end_at=interval.end_at))
+
+
+def _seed_busy_intervals(db: Session, users: dict[str, User], week_start: date, today: date, zone: ZoneInfo) -> None:
+    # Synthetic busy time standing in for a synced Google Calendar, without any real
+    # OAuth connection: calendar_connection_id is nullable, so these render on the
+    # calendar's per-member overlay exactly like real synced busy time would.
+    for spec in MEMBERS:
+        intervals = [
+            *_weekly_intervals(spec.weekly_busy, week_start, BUSY_WEEKS, zone),
+            *one_off_block_intervals(spec.one_off_busy, today, zone),
+        ]
+        for interval in intervals:
+            db.add(
+                CalendarBusyInterval(
+                    user_id=users[spec.key].id,
+                    calendar_connection_id=None,
+                    start_at=interval.start_at,
+                    end_at=interval.end_at,
+                )
+            )
+    db.commit()
+
+
+def _seed_dances(db: Session, users: dict[str, User], today: date, zone: ZoneInfo) -> dict[str, DanceEvent]:
     service = EventService(db)
-    deadline = lambda days: datetime.combine(today + timedelta(days=days), datetime.min.time(), tzinfo=UTC)  # noqa: E731
-    return [
-        service.create_event(
+    events: dict[str, DanceEvent] = {}
+    for spec in DANCES:
+        event = service.create_event(
             DanceEventCreate(
-                name="Contemporary Showcase",
-                description="Spring showcase piece -- two practices needed before the deadline.",
-                organizer_user_id=users[0].id,
-                duration_minutes=90,
-                min_days_apart=2,
-                latest_schedule_at=deadline(21),
-                required_session_count=2,
+                name=spec.name,
+                description=spec.description,
+                organizer_user_id=users[spec.organizer].id,
+                duration_minutes=spec.duration_minutes,
+                min_days_apart=spec.min_days_apart,
+                latest_schedule_at=_end_of_local_day(today + timedelta(days=spec.deadline_days), zone),
+                required_session_count=spec.session_count,
                 participants=[
-                    DanceEventParticipantCreate(user_id=users[0].id, role="required"),
-                    DanceEventParticipantCreate(user_id=users[1].id, role="required"),
-                    DanceEventParticipantCreate(user_id=users[2].id, role="optional"),
+                    *(DanceEventParticipantCreate(user_id=users[key].id, role="required") for key in spec.required),
+                    *(DanceEventParticipantCreate(user_id=users[key].id, role="optional") for key in spec.optional),
                 ],
             )
-        ),
-        service.create_event(
-            DanceEventCreate(
-                name="Nutcracker",
-                description="Winter production run-throughs.",
-                organizer_user_id=users[1].id,
-                duration_minutes=120,
-                min_days_apart=3,
-                latest_schedule_at=deadline(30),
-                required_session_count=3,
-                participants=[DanceEventParticipantCreate(user_id=user.id, role="required") for user in users],
-            )
-        ),
-        service.create_event(
-            DanceEventCreate(
-                name="Solo Piece",
-                description="Unscheduled -- left open so the demo shows all three status states.",
-                organizer_user_id=users[3].id,
-                duration_minutes=60,
-                min_days_apart=1,
-                latest_schedule_at=deadline(45),
-                required_session_count=1,
-                participants=[DanceEventParticipantCreate(user_id=users[3].id, role="required")],
-            )
-        ),
-    ]
+        )
+        # Day/time rules are only settable through the update path, same as the UI.
+        updated = service.update_event(
+            event.id,
+            DanceEventUpdate(
+                allowed_weekdays=list(spec.allowed_weekdays),
+                blocked_weekdays=list(spec.blocked_weekdays),
+                earliest_start_time=spec.earliest_start_time,
+                latest_end_time=spec.latest_end_time,
+            ),
+        )
+        assert updated is not None
+        events[spec.key] = updated
+    return events
 
 
-def _seed_planning_run(db: Session, events: list[DanceEvent], today: date) -> None:
-    horizon_start = datetime.combine(today, datetime.min.time(), tzinfo=UTC)
-    horizon_end = horizon_start + timedelta(days=14)
-    run = PlanningService(db).create_planning_run(
+def _seed_held_sessions(db: Session, events: dict[str, DanceEvent], week_start: date, zone: ZoneInfo) -> None:
+    # Practices that already happened cannot come from a planning run (the planner
+    # only looks forward), so they are the one thing written directly. They carry an
+    # honest explanation instead of a score the engine never computed.
+    room = db.scalars(select(Room).where(Room.name == ROOM_NAME)).one()
+    for spec in DANCES:
+        for session_index, (weekday, start) in enumerate(spec.held_this_week, start=1):
+            day = week_start + timedelta(days=WEEKDAY_BY_INDEX.index(weekday))
+            start_at = datetime.combine(day, start, tzinfo=zone).astimezone(UTC)
+            db.add(
+                PracticeSession(
+                    dance_event_id=events[spec.key].id,
+                    session_index=session_index,
+                    start_at=start_at,
+                    end_at=start_at + timedelta(minutes=spec.duration_minutes),
+                    status="confirmed",
+                    room_id=room.id,
+                    source_run_id=None,
+                    total_score=None,
+                    explanation_json={
+                        "summary": "Held earlier this week; confirmed before the current planning horizon.",
+                        "reasons": [],
+                        "missing_required_user_ids": [],
+                    },
+                )
+            )
+        if spec.held_this_week:
+            events[spec.key].status = "partially_scheduled" if len(spec.held_this_week) < spec.session_count else "scheduled"
+    db.commit()
+    for event in events.values():
+        db.refresh(event)
+
+
+def _seed_planning_run_and_confirmations(db: Session, events: dict[str, DanceEvent], now: datetime) -> None:
+    # Start on the next full hour so candidate slots land on :00 like the UI's.
+    horizon_start = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    service = PlanningService(db)
+    run = service.create_planning_run(
         PlanningRunCreate(
-            event_ids=[event.id for event in events],
+            event_ids=[event.id for event in events.values()],
             horizon_start=horizon_start,
-            horizon_end=horizon_end,
+            horizon_end=horizon_start + timedelta(days=PLANNING_HORIZON_DAYS),
         )
     )
-    if run is None:
-        return
 
-    # Confirm the top-ranked recommendation for the showcase's first session so the
-    # calendar isn't empty on first load, mirroring what a real organizer would do.
-    # Session indices are 1-based (see _pending_session_indices in planning_service.py).
-    top_pick = next(
-        (
-            result
-            for result in sorted(run.results, key=lambda r: r.rank)
-            if result.dance_event_id == events[0].id and result.session_index == 1
-        ),
-        None,
-    )
-    if top_pick is not None:
-        PlanningService(db).confirm_results(run.id, [top_pick.id])
+    # Confirm the top-ranked fully-feasible pick for the sessions each dance asks
+    # for, mirroring what an organizer would do, so the calendar isn't empty on
+    # first load and every dance status (scheduled / partial / unscheduled) shows.
+    picks = []
+    for spec in DANCES:
+        for session_index in spec.confirm_session_indices:
+            pick = _top_feasible_result(run.results, events[spec.key].id, session_index)
+            if pick is not None:
+                picks.append(pick.id)
+    if picks:
+        service.confirm_results(run.id, picks)
 
 
-def reset_demo(db: Session) -> None:
-    """Wipe all domain data and reseed. Used for both the initial seed and demo resets."""
-    _truncate_all(db)
-    today = datetime.now(UTC).date()
-    users = _seed_members(db)
-    _seed_availability(db, users, today)
-    _seed_busy_intervals(db, users, today)
-    events = _seed_events(db, users, today)
-    _seed_planning_run(db, events, today)
+def _top_feasible_result(results: list[PlanningRunResult], dance_event_id, session_index: int) -> PlanningRunResult | None:
+    candidates = [
+        result
+        for result in results
+        if result.dance_event_id == dance_event_id and result.session_index == session_index and not result.is_fallback
+    ]
+    return min(candidates, key=lambda result: result.rank, default=None)
+
+
+def _weekly_intervals(blocks, week_start: date, weeks: int, zone: ZoneInfo) -> list[Interval]:
+    return [interval for block in blocks for interval in weekly_block_intervals(block, week_start, weeks, zone)]
+
+
+def _end_of_local_day(day: date, zone: ZoneInfo) -> datetime:
+    return datetime.combine(day + timedelta(days=1), time(0, 0), tzinfo=zone).astimezone(UTC)
+

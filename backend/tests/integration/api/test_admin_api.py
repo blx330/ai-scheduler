@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from app.application.services.demo_scenario import DANCES, MEMBERS
 from app.infrastructure.config import Settings
 from app.main import create_app
 from tests.auth_helpers import TEST_SESSION_SECRET, log_in
@@ -41,5 +42,5 @@ def test_reset_demo_reseeds_data_with_the_correct_token(session_factory) -> None
         log_in(test_client)
         users = test_client.get("/api/v1/users").json()
         events = test_client.get("/api/v1/events").json()
-        assert len([user for user in users if user["email"]]) == 4
-        assert {event["name"] for event in events} == {"Contemporary Showcase", "Nutcracker", "Solo Piece"}
+        assert {member.email for member in MEMBERS} <= {user["email"] for user in users}
+        assert {event["name"] for event in events} == {dance.name for dance in DANCES}
