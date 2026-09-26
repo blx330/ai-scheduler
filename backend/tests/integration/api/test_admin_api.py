@@ -41,5 +41,5 @@ def test_reset_demo_reseeds_data_with_the_correct_token(session_factory) -> None
         log_in(test_client)
         users = test_client.get("/api/v1/users").json()
         events = test_client.get("/api/v1/events").json()
-        assert len(users) == 4
+        assert len([user for user in users if user["email"]]) == 4
         assert {event["name"] for event in events} == {"Contemporary Showcase", "Nutcracker", "Solo Piece"}

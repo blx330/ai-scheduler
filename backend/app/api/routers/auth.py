@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -84,16 +84,9 @@ def get_current_user_profile(
     current_user: SessionIdentity = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    user = db.get(User, current_user.user_id)
-    if user is None:
-        # The account behind this session was deleted after the cookie was issued.
-        # Raising HTTPException here would discard cookie mutations made on an
-        # injected Response param (FastAPI builds a fresh error response for it), so
-        # build the cleared-cookie response directly instead.
-        error_response = JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"detail": "Not signed in"})
-        error_response.delete_cookie(SESSION_COOKIE_NAME, path="/")
-        return error_response
-    return CurrentUserRead.model_validate(user)
+    # get_current_user already resolved the row (and 401s with a cleared cookie if
+    # the account behind the session was deleted), so this cannot be None.
+    return CurrentUserRead.model_validate(db.get(User, current_user.user_id))
 
 
 def _redirect(url: str) -> RedirectResponse:

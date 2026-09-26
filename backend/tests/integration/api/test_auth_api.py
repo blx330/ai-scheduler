@@ -88,9 +88,7 @@ def test_member_can_edit_their_own_availability_but_not_someone_elses(client) ->
             "end_at": "2026-04-01T12:00:00Z",
         },
     )
-    # 404 (no such user) proves the auth check passed and the request reached the
-    # service layer -- 403 would mean the self-check itself rejected it.
-    assert own_availability.status_code == 404
+    assert own_availability.status_code == 201
 
     other_availability = client.post(
         f"/api/v1/users/{other_member_id}/availability",
@@ -122,7 +120,7 @@ def test_auth_me_without_cookie_is_401(anon_client) -> None:
 
 
 def test_auth_me_for_deleted_account_clears_cookie_and_401s(anon_client) -> None:
-    log_in(anon_client, role=UserRole.ORGANIZER.value, user_id=uuid4())
+    log_in(anon_client, role=UserRole.ORGANIZER.value, user_id=uuid4(), persist=False)
     response = anon_client.get("/api/v1/auth/me")
     assert response.status_code == 401
     assert _cookie_is_cleared(response.headers["set-cookie"])
@@ -232,3 +230,26 @@ def test_member_cannot_promote_anyone(anon_client) -> None:
     log_in(anon_client, role=UserRole.MEMBER.value)
     response = anon_client.patch(f"/api/v1/users/{uuid4()}/role", json={"role": UserRole.ORGANIZER.value})
     assert response.status_code == 403
+
+
+def test_demoted_organizer_loses_organizer_rights_on_the_next_request(client, anon_client) -> None:
+    # `client` is organizer A; `anon_client` becomes organizer B with a fresh cookie.
+    member = client.post(
+        "/api/v1/users", json={"display_name": "Soon Demoted", "timezone": "UTC", "email": "demoted@example.com"}
+    ).json()
+    client.patch(f"/api/v1/users/{member['id']}/role", json={"role": UserRole.ORGANIZER.value})
+    log_in(anon_client, role=UserRole.ORGANIZER.value, user_id=member["id"], persist=False)
+    assert anon_client.post("/api/v1/events", json=_event_payload(member["id"])).status_code == 201
+
+    client.patch(f"/api/v1/users/{member['id']}/role", json={"role": UserRole.MEMBER.value})
+
+    # The cookie still says "organizer"; the database is what must win.
+    response = anon_client.post("/api/v1/events", json=_event_payload(member["id"]))
+    assert response.status_code == 403
+
+
+def test_session_for_a_deleted_account_is_rejected_on_every_endpoint(anon_client) -> None:
+    log_in(anon_client, role=UserRole.ORGANIZER.value, user_id=uuid4(), persist=False)
+    response = anon_client.get("/api/v1/users")
+    assert response.status_code == 401
+    assert _cookie_is_cleared(response.headers["set-cookie"])

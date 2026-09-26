@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
+from app.api.deps import SESSION_COOKIE_NAME, SessionAccountMissingError
 from app.api.routers import (
     admin,
     auth,
@@ -98,6 +99,12 @@ def create_app(
             loc = ".".join(str(part) for part in error["loc"] if part != "body")
             messages.append(f"{loc}: {error['msg']}" if loc else error["msg"])
         return JSONResponse(status_code=422, content={"detail": "; ".join(messages)})
+
+    @app.exception_handler(SessionAccountMissingError)
+    async def handle_missing_session_account(_: Request, __: SessionAccountMissingError) -> JSONResponse:
+        response = JSONResponse(status_code=401, content={"detail": "Not signed in"})
+        response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+        return response
 
     @app.exception_handler(OperationalError)
     async def handle_operational_error(_: Request, exc: OperationalError) -> JSONResponse:

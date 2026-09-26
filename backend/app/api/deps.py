@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.application.services.auth_service import SessionIdentity, decode_session
 from app.infrastructure.auth.session_tokens import InvalidTokenError
 from app.infrastructure.config import Settings
+from app.infrastructure.db.models import User
 from app.infrastructure.integrations.google_calendar.client import GoogleCalendarProvider
 from app.infrastructure.integrations.google_identity.client import GoogleIdentityProvider
 from app.infrastructure.integrations.llm.profile_preference_parser import (
@@ -51,17 +52,34 @@ def get_google_identity_client(request: Request) -> GoogleIdentityProvider:
     return request.app.state.google_identity_client
 
 
+class SessionAccountMissingError(Exception):
+    """A correctly signed session cookie names a users row that no longer exists.
+
+    Raised (not HTTPException) so the app-level handler can clear the dead cookie on
+    the 401 -- HTTPException builds a fresh response and would drop that mutation.
+    """
+
+
 def get_current_user(
     request: Request,
     settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
 ) -> SessionIdentity:
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not signed in")
     try:
-        return decode_session(token, settings.session_secret or "")
+        claimed = decode_session(token, settings.session_secret or "")
     except InvalidTokenError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired or invalid") from exc
+
+    # The cookie is only proof of *who* signed in. Role is read from the database on
+    # every request so a demotion or deletion takes effect immediately, instead of
+    # after the cookie's 30-day expiry.
+    user = db.get(User, claimed.user_id)
+    if user is None:
+        raise SessionAccountMissingError()
+    return SessionIdentity(user_id=user.id, role=user.role)
 
 
 def require_organizer(current_user: SessionIdentity = Depends(get_current_user)) -> SessionIdentity:

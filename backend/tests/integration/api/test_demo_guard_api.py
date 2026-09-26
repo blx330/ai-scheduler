@@ -29,7 +29,8 @@ def test_guard_is_a_no_op_when_admin_reset_token_is_unset(client) -> None:
 
 
 def test_row_cap_blocks_creation_once_the_demo_capacity_limit_is_reached(session_factory, monkeypatch) -> None:
-    monkeypatch.setattr("app.infrastructure.demo_guard.DEMO_ROW_LIMIT", 2)
+    # log_in persists the signed-in organizer, which counts as one row.
+    monkeypatch.setattr("app.infrastructure.demo_guard.DEMO_ROW_LIMIT", 3)
     app = _demo_app(session_factory)
     with TestClient(app) as test_client:
         log_in(test_client)
