@@ -209,3 +209,34 @@ def test_fallback_penalty_scales_with_the_number_of_missing_participants() -> No
     two_missing, _ = _build_scoring_metadata(missing_required_user_ids=[uuid4(), uuid4()], **common)
 
     assert two_missing["fallback_penalty"] < one_missing["fallback_penalty"] < 0
+
+
+def test_first_session_prefers_a_slot_that_leaves_the_second_fully_staffed() -> None:
+    """Both dancers share an afternoon on day 10 and an evening on day 12; dancer B
+    is free nowhere else. Ranking session 1 purely by score picks the day-12 evening,
+    which leaves session 2 with nothing but a fallback missing B. A slot whose
+    remaining sessions can still be fully staffed must rank first."""
+    shared_afternoon = Interval(_utc(16, day=10), _utc(17, day=10))
+    shared_evening = Interval(_utc(18, day=12), _utc(19, day=12))
+    dancer_a = _participant("required", [shared_afternoon, shared_evening, Interval(_utc(18, day=13), _utc(19, day=13))])
+    dancer_b = _participant("required", [shared_afternoon, shared_evening])
+    event = _event([dancer_a, dancer_b], pending_session_indices=(1, 2), latest_schedule_at=_utc(0, 0, day=14))
+
+    recommendations = plan_practice_sessions(
+        events=[event],
+        fixed_reservations=[],
+        room_id=uuid4(),
+        planning_horizon_start=_utc(8),
+        planning_horizon_end=_utc(0, 0, day=14),
+        slot_step_minutes=60,
+        max_results_per_session=3,
+    )
+
+    first = [item for item in recommendations if item.session_index == 1]
+    second = [item for item in recommendations if item.session_index == 2]
+    assert first[0].start_at == _utc(16, day=10)
+    assert first[0].is_fallback is False
+    # The evening is still offered, just ranked below the slot that keeps session 2 feasible.
+    assert [item.start_at for item in first[1:]] == [_utc(18, day=12)]
+    assert second[0].start_at == _utc(18, day=12)
+    assert second[0].is_fallback is False

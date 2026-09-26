@@ -101,6 +101,9 @@ class PlanningRecommendation:
     missing_required_user_ids: list[UUID]
     optional_available_count: int
     participant_statuses: list[ScheduleParticipantStatus]
+    # False when taking this slot leaves a later session of the same dance with
+    # nothing but fallback options. Ranks below any slot that keeps them all full.
+    remaining_sessions_fully_staffed: bool = True
 
     @property
     def attending_user_ids(self) -> frozenset[UUID]:
@@ -277,8 +280,16 @@ def build_ranked_recommendations(
 
 def _recommendation_sort_key(item: PlanningRecommendation):
     """is_fallback leads so a fallback can never outrank a slot where every required
-    participant is available, however attractive its time-of-day tier is."""
-    return (item.is_fallback, -item.total_score, -item.optional_available_count, item.start_at)
+    participant is available, however attractive its time-of-day tier is. Next comes
+    whether the dance's later sessions can still be fully staffed, for the same
+    reason one level up: a required dancer is a hard constraint, not a score."""
+    return (
+        item.is_fallback,
+        not item.remaining_sessions_fully_staffed,
+        -item.total_score,
+        -item.optional_available_count,
+        item.start_at,
+    )
 
 
 def _build_candidates(
@@ -340,10 +351,16 @@ def _build_candidates(
 
     options_by_start = {option.slot.start_at: option for option in candidate_options}
     remaining_indices = _remaining_session_indices(event, session_index)
-    recommendations: list[PlanningRecommendation] = []
+    # A slot whose remaining sessions can still be fully staffed outranks one that
+    # forces a later session into a fallback, whatever their own scores. Ranking by
+    # score alone picked the best-scoring evening for session 1 and left session 2
+    # with nothing but fallbacks, when a slightly worse session 1 kept both full.
+    fully_completable: list[PlanningRecommendation] = []
+    fallback_completable: list[PlanningRecommendation] = []
     rejection_counts["no_valid_remaining_sequence"] = 0
+    rejection_counts["remaining_sequence_needs_fallback"] = 0
     for recommendation in scored:
-        if len(recommendations) >= max_results:
+        if len(fully_completable) >= max_results:
             break
         if remaining_indices:
             option = options_by_start[recommendation.start_at]
@@ -357,7 +374,7 @@ def _build_candidates(
                     attending_user_ids=option.attending_user_ids,
                 ),
             ]
-            if not _can_complete_remaining_sessions(
+            completion = _remaining_sessions_completion(
                 event=event,
                 remaining_session_indices=remaining_indices,
                 reservations=future_reservations,
@@ -365,10 +382,26 @@ def _build_candidates(
                 planning_horizon_start=planning_horizon_start,
                 planning_horizon_end=planning_horizon_end,
                 slot_step_minutes=slot_step_minutes,
-            ):
+            )
+            if completion is None:
                 rejection_counts["no_valid_remaining_sequence"] += 1
                 continue
-        recommendations.append(recommendation)
+            if completion == "fallback":
+                rejection_counts["remaining_sequence_needs_fallback"] += 1
+                recommendation.remaining_sessions_fully_staffed = False
+                recommendation.explanation["reasons"].append(
+                    {
+                        "code": "later_session_needs_fallback",
+                        "message": (
+                            "Taking this slot leaves a later session of this dance with no time "
+                            "where every required participant can attend."
+                        ),
+                    }
+                )
+                fallback_completable.append(recommendation)
+                continue
+        fully_completable.append(recommendation)
+    recommendations = [*fully_completable, *fallback_completable][:max_results]
     logger.info(
         "planning candidates event=%s session_index=%s allowed_missing_required=%s generated_slots=%s "
         "accepted=%s rejections=%s horizon_start=%s horizon_end=%s duration_minutes=%s",
@@ -493,7 +526,7 @@ def _build_candidate_options(
     return options, len(candidate_starts), rejection_counts
 
 
-def _can_complete_remaining_sessions(
+def _remaining_sessions_completion(
     event: PlanningEventInput,
     remaining_session_indices: tuple[int, ...],
     reservations: list[SessionReservation],
@@ -501,8 +534,12 @@ def _can_complete_remaining_sessions(
     planning_horizon_start: datetime,
     planning_horizon_end: datetime,
     slot_step_minutes: int,
-) -> bool:
+) -> str | None:
     """Can the event's remaining sessions all still be placed?
+
+    Returns "full" when every remaining session has a slot with all required
+    dancers, "fallback" when at least one of them can only be placed missing a
+    required dancer, and None when some session cannot be placed at all.
 
     Scheduling each remaining session as early as possible is sufficient to answer
     this: every constraint linking one session to the next (`min_days_apart`, the
@@ -515,6 +552,7 @@ def _can_complete_remaining_sessions(
     horizon took ~168s inside the request.
     """
     working_reservations = list(reservations)
+    needs_fallback = False
 
     for session_index in remaining_session_indices:
         option = _earliest_candidate_option(
@@ -527,7 +565,8 @@ def _can_complete_remaining_sessions(
             slot_step_minutes=slot_step_minutes,
         )
         if option is None:
-            return False
+            return None
+        needs_fallback = needs_fallback or bool(option.missing_required_user_ids)
         working_reservations.append(
             _build_session_reservation(
                 event=event,
@@ -537,7 +576,7 @@ def _can_complete_remaining_sessions(
                 attending_user_ids=option.attending_user_ids,
             )
         )
-    return True
+    return "fallback" if needs_fallback else "full"
 
 
 def _earliest_candidate_option(
