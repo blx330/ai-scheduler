@@ -425,7 +425,7 @@ export function EventsPage() {
                 <div key={session.id} className="flex items-center justify-between rounded-md border p-3">
                   <div>
                     <p className="text-sm font-medium">
-                      Session {session.session_index + 1} &middot; {formatTimeRange(session.start_at, session.end_at, organizerTz)}
+                      Session {session.session_index} &middot; {formatTimeRange(session.start_at, session.end_at, organizerTz)}
                     </p>
                     <div className="mt-1 flex flex-wrap gap-1">
                       <Badge variant="secondary">{session.status}</Badge>

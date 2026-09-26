@@ -42,7 +42,10 @@ export function useReschedulePractice() {
     // Awaited for the same reason as useConfirmPlanningRun: the caller keeps the drag
     // preview at the drop position until the refetched overview agrees with it.
     onSuccess: async (data) => {
-      await queryClient.invalidateQueries({ queryKey: ["calendar-overview"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["calendar-overview"] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.eventSessions(data.practice.dance_event_id) }),
+      ]);
       if (data.warning) {
         toast.warning(data.warning);
       } else {

@@ -42,6 +42,15 @@ function isActivationKey(e: KeyboardEvent): boolean {
   return e.key === "Enter" || e.key === " ";
 }
 
+/** What to draw for a block being dragged in from another week (its source block
+ * is not part of the visible week's data). */
+export interface DragGhost {
+  label: string;
+  color: string;
+  durationMin: number;
+  isFallback: boolean;
+}
+
 interface WeekGridProps {
   days: Date[];
   dayDateStrings: string[];
@@ -55,6 +64,7 @@ interface WeekGridProps {
   activeRun: PlanningRunRead | null;
   dismissedResultIds: Set<string>;
   dragPreview: DragPreview | null;
+  dragGhost: DragGhost | null;
   editMode: boolean;
   gridRef: RefObject<HTMLDivElement | null>;
   scrollContainerRef: RefObject<HTMLDivElement | null>;
@@ -69,6 +79,7 @@ interface WeekGridProps {
   onStartConfirmedDrag: (e: MouseEvent, session: PracticeSessionRead, day: number, startMin: number, durationMin: number) => void;
   onConfirmSuggestion: (group: PlanningSessionRecommendationGroup, rec: PlanningRecommendationRead) => void;
   onDismissSuggestion: (recId: string) => void;
+  onOpenSession: (session: PracticeSessionRead) => void;
 }
 
 export function WeekGrid({
@@ -84,6 +95,7 @@ export function WeekGrid({
   activeRun,
   dismissedResultIds,
   dragPreview,
+  dragGhost,
   editMode,
   gridRef,
   scrollContainerRef,
@@ -91,6 +103,7 @@ export function WeekGrid({
   onStartConfirmedDrag,
   onConfirmSuggestion,
   onDismissSuggestion,
+  onOpenSession,
 }: WeekGridProps) {
   const hourLabels = Array.from({ length: NUM_HOURS + 1 }, (_, i) => fmtHourLabel(DAY_START_MIN + i * 60));
 
@@ -187,6 +200,24 @@ export function WeekGrid({
     return blocks;
   }, [overview, eventsById, checkedIds, dayDateStrings, dragPreview, eventColorMap]);
 
+  // A drag that crossed into this week from another one has no source block here,
+  // so draw the preview from the ghost description instead.
+  const ghostBlock = useMemo(() => {
+    if (!dragPreview || !dragGhost) return null;
+    const rendered =
+      confirmedBlocks.some((block) => block.session.id === dragPreview.id) ||
+      suggestedBlocks.some((block) => block.recId === dragPreview.id);
+    if (rendered) return null;
+    return {
+      ...dragGhost,
+      day: dragPreview.day,
+      startMin: dragPreview.startMin,
+      durationMin: clampDurationToDay(dragPreview.startMin, dragGhost.durationMin),
+      timeLabel: fmtHourLabel(dragPreview.startMin),
+      suggested: dragPreview.kind === "suggested",
+    };
+  }, [dragPreview, dragGhost, confirmedBlocks, suggestedBlocks]);
+
   return (
     <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-auto">
       <div className="min-w-[900px]">
@@ -251,20 +282,29 @@ export function WeekGrid({
                 day={block.day}
                 startMin={block.startMin}
                 durationMin={block.durationMin}
+                role="button"
                 tabIndex={0}
-                aria-label={`${block.label}, confirmed, ${format(days[block.day], "EEEE")} ${block.timeLabel}${editMode ? ". Drag to reschedule." : ""}`}
+                aria-label={`${block.label}, confirmed, ${format(days[block.day], "EEEE")} ${block.timeLabel}. Press Enter to open.${editMode ? " Drag to reschedule." : ""}`}
                 onMouseDown={
                   editMode
                     ? (e) => onStartConfirmedDrag(e, block.session, block.day, block.startMin, block.durationMin)
                     : undefined
                 }
+                // In edit mode a click is a drag that never moved; the drop handler
+                // opens the editor in that case, so only bind onClick outside it.
+                onClick={editMode ? undefined : () => onOpenSession(block.session)}
+                onKeyDown={(e) => {
+                  if (!isActivationKey(e) || e.target !== e.currentTarget) return;
+                  e.preventDefault();
+                  onOpenSession(block.session);
+                }}
                 className="shadow-sm"
                 style={{
                   background: block.color,
                   color: "#fff",
                   borderRadius: 8,
                   padding: "8px 10px",
-                  cursor: editMode ? "grab" : "default",
+                  cursor: editMode ? "grab" : "pointer",
                   border: editMode ? "2px dashed rgba(255,255,255,0.7)" : "2px solid transparent",
                   userSelect: editMode ? "none" : undefined,
                 }}
@@ -327,6 +367,39 @@ export function WeekGrid({
                 {block.isFallback && <div className="text-[10px] font-semibold mt-0.5">missing required</div>}
               </CalendarBlock>
             ))}
+
+            {ghostBlock && (
+              <CalendarBlock
+                day={ghostBlock.day}
+                startMin={ghostBlock.startMin}
+                durationMin={ghostBlock.durationMin}
+                aria-hidden
+                className="shadow-md"
+                style={
+                  ghostBlock.suggested
+                    ? {
+                        border: `2px dashed ${ghostBlock.isFallback ? "#dc2626" : ghostBlock.color}`,
+                        color: ghostBlock.isFallback ? "#dc2626" : ghostBlock.color,
+                        background: "rgba(255,255,255,0.85)",
+                        borderRadius: 8,
+                        padding: "8px 10px",
+                        pointerEvents: "none",
+                      }
+                    : {
+                        background: ghostBlock.color,
+                        color: "#fff",
+                        border: "2px dashed rgba(255,255,255,0.7)",
+                        borderRadius: 8,
+                        padding: "8px 10px",
+                        opacity: 0.9,
+                        pointerEvents: "none",
+                      }
+                }
+              >
+                <div className="text-xs font-bold truncate">{ghostBlock.label}</div>
+                <div className="text-[11px] opacity-80 mt-0.5">{ghostBlock.timeLabel}</div>
+              </CalendarBlock>
+            )}
           </div>
         </div>
       </div>

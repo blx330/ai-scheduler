@@ -8,15 +8,21 @@ import { Card } from "@/components/ui/card";
 import { ApiError } from "@/api/client";
 import { DancesPanel } from "@/components/calendar/DancesPanel";
 import { MembersPanel } from "@/components/calendar/MembersPanel";
-import { WeekGrid } from "@/components/calendar/WeekGrid";
+import { WeekGrid, type DragGhost } from "@/components/calendar/WeekGrid";
+import { SessionEditorDialog } from "@/components/calendar/SessionEditorDialog";
 import { FallbackConfirmDialog, type PendingFallback } from "@/components/calendar/FallbackConfirmDialog";
 import { RescheduleConflictDialog, type PendingReschedule } from "@/components/calendar/RescheduleConflictDialog";
 import { SchedulingRequestPanel } from "@/components/scheduling/SchedulingRequestPanel";
 import { useCurrentUser } from "@/hooks/use-auth";
-import { useBlockDrag } from "@/hooks/use-block-drag";
+import { useBlockDrag, type DropResult } from "@/hooks/use-block-drag";
 import { useCalendarOverview } from "@/hooks/use-calendar";
 import { useEvents } from "@/hooks/use-events";
-import { useConfirmPlanningRun, useCreatePlanningRun, useReschedulePractice } from "@/hooks/use-planning";
+import {
+  useConfirmPlanningRun,
+  useCreatePlanningRun,
+  useReschedulePractice,
+  useUnschedulePractice,
+} from "@/hooks/use-planning";
 import { useUsers } from "@/hooks/use-users";
 import { errorMessage } from "@/hooks/query-keys";
 import {
@@ -48,6 +54,7 @@ export function CalendarPage() {
   const createRun = useCreatePlanningRun();
   const confirmRun = useConfirmPlanningRun();
   const reschedulePractice = useReschedulePractice();
+  const unschedulePractice = useUnschedulePractice();
 
   const [anchor, setAnchor] = useState(() => new Date());
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
@@ -58,14 +65,21 @@ export function CalendarPage() {
   const [pendingFallback, setPendingFallback] = useState<PendingFallback | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [pendingReschedule, setPendingReschedule] = useState<PendingReschedule | null>(null);
+  const [editingSession, setEditingSession] = useState<PracticeSessionRead | null>(null);
+  // Describes the block being dragged so the grid can keep drawing it after the
+  // visible week flips away from the block's own data.
+  const [dragGhost, setDragGhost] = useState<DragGhost | null>(null);
 
   const gridRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const { dragPreview, setDragPreview, beginBlockDrag } = useBlockDrag({
+  const { dragPreview, setDragPreview, beginBlockDrag, isDraggingRef } = useBlockDrag({
     gridRef,
+    viewportRef: scrollContainerRef,
     pxPerMin: PX_PER_MIN,
     dayStartMin: DAY_START_MIN,
     dayEndMin: DAY_END_MIN,
+    onWeekFlip: (direction) => setAnchor((prev) => addWeeks(prev, direction)),
+    onCancel: () => setDragGhost(null),
   });
 
   // Ids we have already offered a default for. Without this, "absent from checkedIds"
@@ -121,6 +135,11 @@ export function CalendarPage() {
   const weekEnd = useMemo(() => endOfWeek(anchor, { weekStartsOn: 1 }), [anchor]);
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
   const dayDateStrings = useMemo(() => days.map((d) => format(d, "yyyy-MM-dd")), [days]);
+  // A drop must resolve against the week on screen at drop time, which may not be
+  // the week the drag started in; the drag callbacks read this instead of closing
+  // over a stale copy.
+  const dayDateStringsRef = useRef(dayDateStrings);
+  dayDateStringsRef.current = dayDateStrings;
 
 
   // Busy time only for members toggled visible in the Members panel -- that panel
@@ -161,8 +180,11 @@ export function CalendarPage() {
   }, [overview, activeRun, dismissedResultIds, dayDateStrings]);
 
   useEffect(() => {
+    // Re-scrolling under a drag that just flipped weeks would pull the grid out
+    // from under the pointer.
+    if (isDraggingRef.current) return;
     scrollContainerRef.current?.scrollTo({ top: firstPracticeMinute * PX_PER_MIN });
-  }, [weekStart, firstPracticeMinute]);
+  }, [weekStart, firstPracticeMinute, isDraggingRef]);
 
   const eventsById = useMemo(() => new Map((events ?? []).map((e) => [e.id, e])), [events]);
   const usersById = useMemo(() => new Map((users ?? []).map((u) => [u.id, u])), [users]);
@@ -215,6 +237,19 @@ export function CalendarPage() {
     commitConfirm(activeRun.id, rec, group.dance_name);
   }
 
+  // Grid coordinates are in the viewer's timezone (see WeekGrid/gridPlacement), so
+  // they must be converted back from it -- using the organizer's timezone here made
+  // a dropped block land at a different instant than the one it was dropped on.
+  function dropToIso(drop: DropResult, durationMin: number): { startIso: string; endIso: string } {
+    const dateStr = dayDateStringsRef.current[drop.finalDay];
+    const startParts = addMinutesToDateTime(dateStr, drop.finalStartMin);
+    const endParts = addMinutesToDateTime(dateStr, drop.finalStartMin + durationMin);
+    return {
+      startIso: localPartsToIso(startParts.date, startParts.time, GRID_TIME_ZONE),
+      endIso: localPartsToIso(endParts.date, endParts.time, GRID_TIME_ZONE),
+    };
+  }
+
   function startDrag(
     e: React.MouseEvent,
     group: PlanningSessionRecommendationGroup,
@@ -226,22 +261,22 @@ export function CalendarPage() {
     if (!rec.id || !activeRun) return;
     const runId = activeRun.id;
     const recId = rec.id;
-    beginBlockDrag(e, "suggested", recId, day, startMin, durationMin, (finalDay, finalStartMin, moved) => {
+    setDragGhost({
+      label: `${group.dance_name} (suggested)`,
+      color: eventColorMap.get(group.dance_event_id) ?? "#6b7280",
+      durationMin,
+      isFallback: rec.is_fallback,
+    });
+    beginBlockDrag(e, "suggested", recId, day, startMin, durationMin, (drop) => {
+      setDragGhost(null);
       // A plain click is not a confirmation: confirming goes through the explicit
       // check button / Enter key so a visitor inspecting a suggestion cannot commit
       // it (and write to Google Calendar) by accident.
-      if (!moved) {
+      if (!drop.moved) {
         setDragPreview(null);
         return;
       }
-      const dateStr = dayDateStrings[finalDay];
-      const startParts = addMinutesToDateTime(dateStr, finalStartMin);
-      const endParts = addMinutesToDateTime(dateStr, finalStartMin + durationMin);
-      // Grid coordinates are in the viewer's timezone (see WeekGrid/gridPlacement), so
-      // they must be converted back from it -- using the organizer's timezone here made
-      // a dropped block land at a different instant than the one it was dropped on.
-      const startIso = localPartsToIso(startParts.date, startParts.time, GRID_TIME_ZONE);
-      const endIso = localPartsToIso(endParts.date, endParts.time, GRID_TIME_ZONE);
+      const { startIso, endIso } = dropToIso(drop, durationMin);
       commitConfirm(runId, rec, group.dance_name, { start_at: startIso, end_at: endIso });
     });
   }
@@ -253,18 +288,27 @@ export function CalendarPage() {
     startMin: number,
     durationMin: number,
   ) {
-    beginBlockDrag(e, "confirmed", session.id, day, startMin, durationMin, (finalDay, finalStartMin, moved) => {
-      if (!moved) {
+    setDragGhost({
+      label: eventsById.get(session.dance_event_id)?.name ?? "Practice",
+      color: eventColorMap.get(session.dance_event_id) ?? "#6b7280",
+      durationMin,
+      isFallback: false,
+    });
+    beginBlockDrag(e, "confirmed", session.id, day, startMin, durationMin, (drop) => {
+      setDragGhost(null);
+      if (!drop.moved) {
+        // Google Calendar behaviour: a click on an event opens it.
         setDragPreview(null);
+        setEditingSession(session);
         return;
       }
-      const dateStr = dayDateStrings[finalDay];
-      const startParts = addMinutesToDateTime(dateStr, finalStartMin);
-      const endParts = addMinutesToDateTime(dateStr, finalStartMin + durationMin);
-      const startIso = localPartsToIso(startParts.date, startParts.time, GRID_TIME_ZONE);
-      const endIso = localPartsToIso(endParts.date, endParts.time, GRID_TIME_ZONE);
+      const { startIso, endIso } = dropToIso(drop, durationMin);
       attemptReschedule(session, startIso, endIso);
     });
+  }
+
+  function handleUnschedule(session: PracticeSessionRead) {
+    unschedulePractice.mutate(session.id, { onSuccess: () => setEditingSession(null) });
   }
 
   function attemptReschedule(session: PracticeSessionRead, startIso: string, endIso: string, override = false) {
@@ -274,6 +318,7 @@ export function CalendarPage() {
         onSuccess: () => {
           setDragPreview(null);
           setPendingReschedule(null);
+          setEditingSession(null);
         },
         onError: (error) => {
           if (error instanceof ApiError && error.status === 409 && typeof error.detail === "object" && "conflict_type" in error.detail) {
@@ -474,6 +519,7 @@ export function CalendarPage() {
             activeRun={activeRun}
             dismissedResultIds={dismissedResultIds}
             dragPreview={dragPreview}
+            dragGhost={dragGhost}
             editMode={editMode}
             gridRef={gridRef}
             scrollContainerRef={scrollContainerRef}
@@ -481,9 +527,22 @@ export function CalendarPage() {
             onStartConfirmedDrag={startConfirmedDrag}
             onConfirmSuggestion={confirmSuggestion}
             onDismissSuggestion={(recId) => setDismissedResultIds((prev) => new Set(prev).add(recId))}
+            onOpenSession={setEditingSession}
           />
         </Card>
       </div>
+
+      <SessionEditorDialog
+        session={editingSession}
+        dance={editingSession ? eventsById.get(editingSession.dance_event_id) : undefined}
+        usersById={usersById}
+        timeZone={GRID_TIME_ZONE}
+        canEdit={isOrganizer}
+        isSaving={reschedulePractice.isPending || unschedulePractice.isPending}
+        onClose={() => setEditingSession(null)}
+        onSave={(session, startIso, endIso) => attemptReschedule(session, startIso, endIso)}
+        onUnschedule={handleUnschedule}
+      />
 
       <FallbackConfirmDialog
         pendingFallback={pendingFallback}
