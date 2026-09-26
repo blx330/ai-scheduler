@@ -16,7 +16,12 @@ from app.infrastructure.db.models import (
     ManualAvailabilityInterval,
     User,
 )
-from app.infrastructure.integrations.llm.profile_preference_parser import UserProfilePreferenceParser
+from app.infrastructure.integrations.llm.profile_preference_parser import (
+    ProfilePreferenceParseError,
+    ProfilePreferenceParserUnavailable,
+    ProfilePreferenceUpstreamError,
+    UserProfilePreferenceParser,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +151,8 @@ class UserService:
         user = self.db.get(User, user_id)
         if user is None:
             return None
+        if user.role == UserRole.ORGANIZER.value and role != UserRole.ORGANIZER.value and self._is_last_organizer():
+            raise ValueError("Cannot demote the last remaining organizer; promote someone else first")
         user.role = role
         self.db.add(user)
         self.db.commit()
@@ -156,6 +163,8 @@ class UserService:
         user = self.db.get(User, user_id)
         if user is None:
             return False
+        if user.role == UserRole.ORGANIZER.value and self._is_last_organizer():
+            raise ValueError("Cannot delete the last remaining organizer; promote someone else first")
 
         organizes_event = self.db.scalars(
             select(DanceEvent.id).where(DanceEvent.organizer_user_id == user_id).limit(1)
@@ -172,6 +181,12 @@ class UserService:
         self.db.delete(user)
         self.db.commit()
         return True
+
+    def _is_last_organizer(self) -> bool:
+        organizer_count = self.db.scalar(
+            select(func.count()).select_from(User).where(User.role == UserRole.ORGANIZER.value)
+        )
+        return (organizer_count or 0) <= 1
 
 
 def _normalize_email(email: str | None) -> str | None:
@@ -215,6 +230,9 @@ def _apply_user_practice_preferences(
         user.preferred_practice_time_parsed = (
             cached_preference.model_dump(mode="json") if cached_preference.is_useful() else None
         )
+    except (ProfilePreferenceParserUnavailable, ProfilePreferenceUpstreamError, ProfilePreferenceParseError):
+        # Typed by the parser so the API can answer 503/502/422 instead of a blanket 400.
+        raise
     except Exception as exc:  # noqa: BLE001 - parser boundary is untrusted, surface full error to caller
         logger.warning("Failed to parse cached practice preferences for user %s: %s", user.id, exc)
         raise ValueError(str(exc)) from exc

@@ -2,7 +2,13 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import func, select
+
+from app.application.services.auth_service import DEMO_GUEST_USER_ID, AuthService
 from app.domain.common.enums import UserRole
+from app.infrastructure.db.models import User
 from app.infrastructure.integrations.google_identity.client import GoogleIdentity
 from tests.auth_helpers import log_in
 
@@ -253,3 +259,122 @@ def test_session_for_a_deleted_account_is_rejected_on_every_endpoint(anon_client
     response = anon_client.get("/api/v1/users")
     assert response.status_code == 401
     assert _cookie_is_cleared(response.headers["set-cookie"])
+
+
+def test_demo_login_always_resolves_to_the_fixed_guest_id(anon_client, app) -> None:
+    app.state.settings.admin_reset_token = "demo-token"
+    anon_client.get("/api/v1/auth/demo-login", follow_redirects=False)
+    first = anon_client.get("/api/v1/auth/me").json()
+    anon_client.cookies.delete("session")
+    anon_client.get("/api/v1/auth/demo-login", follow_redirects=False)
+    second = anon_client.get("/api/v1/auth/me").json()
+
+    assert first["id"] == second["id"] == str(DEMO_GUEST_USER_ID)
+    assert first["timezone"] == "America/New_York"
+    assert first["display_name"] == "Demo Guest"
+
+
+def test_demo_login_survives_a_concurrent_first_insert(monkeypatch, app) -> None:
+    """Two first visitors race to insert the guest; the loser must reuse the winner's row."""
+    session_factory = app.state.session_factory
+    with session_factory() as db:
+        AuthService(db, app.state.settings, object()).demo_login()
+
+    original = AuthService._find_demo_guest
+    lookups = {"count": 0}
+
+    def miss_once(self):
+        lookups["count"] += 1
+        return None if lookups["count"] == 1 else original(self)
+
+    monkeypatch.setattr(AuthService, "_find_demo_guest", miss_once)
+    with session_factory() as db:
+        result = AuthService(db, app.state.settings, object()).demo_login()
+        assert result.user.id == DEMO_GUEST_USER_ID
+        assert db.scalar(select(func.count()).select_from(User)) == 1
+
+
+def test_google_callback_without_the_login_nonce_cookie_is_rejected(anon_client, app) -> None:
+    app.state.settings.admin_emails = [ADMIN_EMAIL]
+    app.state.google_identity_client = FakeGoogleIdentityClient(
+        GoogleIdentity(subject="admin-sub", email=ADMIN_EMAIL, email_verified=True, name="Admin Person")
+    )
+    start = anon_client.get("/api/v1/auth/google/login", follow_redirects=False)
+    assert "login_nonce" in anon_client.cookies
+    state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
+
+    # Same signed state, presented from a browser that never started this sign-in.
+    with TestClient(app) as other_browser:
+        callback = other_browser.get(
+            "/api/v1/auth/google/callback", params={"code": "fake-code", "state": state}, follow_redirects=False
+        )
+    assert callback.status_code in (302, 307)
+    assert "login_error" in callback.headers["location"]
+    assert "Invalid+or+expired+sign-in+attempt" in callback.headers["location"]
+    assert "session" not in other_browser.cookies
+
+
+def test_google_callback_clears_the_login_nonce_cookie_on_success(anon_client, app) -> None:
+    app.state.settings.admin_emails = [ADMIN_EMAIL]
+    identity = GoogleIdentity(subject="admin-sub", email=ADMIN_EMAIL, email_verified=True, name="Admin Person")
+
+    callback = _login_via_google(anon_client, app, identity)
+
+    assert callback.status_code in (302, 307)
+    assert 'login_nonce=""' in callback.headers["set-cookie"] or "login_nonce=; " in callback.headers["set-cookie"]
+
+
+@pytest.mark.parametrize("email", [ADMIN_EMAIL, ROSTER_EMAIL])
+def test_google_callback_rejects_unverified_email_for_email_matching_and_admin_bootstrap(
+    client, anon_client, app, email
+) -> None:
+    app.state.settings.admin_emails = [ADMIN_EMAIL]
+    client.post("/api/v1/users", json={"display_name": "Roster Member", "timezone": "UTC", "email": ROSTER_EMAIL})
+    identity = GoogleIdentity(subject="unverified-sub", email=email, email_verified=False, name="Someone")
+
+    callback = _login_via_google(anon_client, app, identity)
+
+    assert callback.status_code in (302, 307)
+    assert "login_error" in callback.headers["location"]
+    assert "session" not in anon_client.cookies
+
+
+def test_google_callback_still_matches_a_linked_subject_when_email_is_unverified(client, anon_client, app) -> None:
+    app.state.settings.admin_emails = []
+    roster_member = client.post(
+        "/api/v1/users", json={"display_name": "Roster Member", "timezone": "UTC", "email": ROSTER_EMAIL}
+    ).json()
+    _login_via_google(anon_client, app, GoogleIdentity(subject="roster-sub", email=ROSTER_EMAIL, email_verified=True, name=None))
+    anon_client.cookies.delete("session")
+
+    callback = _login_via_google(
+        anon_client, app, GoogleIdentity(subject="roster-sub", email=ROSTER_EMAIL, email_verified=False, name=None)
+    )
+
+    assert callback.status_code in (302, 307)
+    assert anon_client.get("/api/v1/auth/me").json()["id"] == roster_member["id"]
+
+
+def test_last_organizer_cannot_be_demoted_or_deleted(client) -> None:
+    me = client.get("/api/v1/auth/me").json()
+
+    demote = client.patch(f"/api/v1/users/{me['id']}/role", json={"role": UserRole.MEMBER.value})
+    assert demote.status_code == 400
+    assert "last" in demote.json()["detail"]
+    delete = client.delete(f"/api/v1/users/{me['id']}")
+    assert delete.status_code == 400
+    assert "last" in delete.json()["detail"]
+    assert client.get("/api/v1/auth/me").json()["role"] == UserRole.ORGANIZER.value
+
+
+def test_organizer_can_be_demoted_once_another_organizer_exists(client) -> None:
+    me = client.get("/api/v1/auth/me").json()
+    other = client.post(
+        "/api/v1/users", json={"display_name": "Second Organizer", "timezone": "UTC", "email": "second@example.com"}
+    ).json()
+    client.patch(f"/api/v1/users/{other['id']}/role", json={"role": UserRole.ORGANIZER.value})
+
+    response = client.patch(f"/api/v1/users/{me['id']}/role", json={"role": UserRole.MEMBER.value})
+
+    assert response.status_code == 200
+    assert response.json()["role"] == UserRole.MEMBER.value

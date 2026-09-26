@@ -116,6 +116,10 @@ class GoogleCalendarService:
         if connected and connection.scopes is not None and not _has_any_scope(connection.scopes, GOOGLE_READ_SCOPES):
             connected = False
             status = "reauthorization_required"
+        if status == "reauthorization_required":
+            # Auto-sync marks a connection this way once Google reports its grant revoked;
+            # the stored tokens exist but are dead.
+            connected = False
         return GoogleConnectionStatus(
             user_id=user_id,
             connected=connected,

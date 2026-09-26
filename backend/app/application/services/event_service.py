@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.schemas.events import DanceEventCreate, DanceEventUpdate
+from app.application.services.google_calendar_service import GoogleCalendarService
 from app.domain.common.datetime_utils import ensure_utc
 from app.domain.common.enums import Weekday
 from app.domain.scheduling.constraints import WEEKDAY_BY_INDEX, DayTimeConstraints
@@ -64,7 +65,9 @@ class EventService:
         )
         return self.db.scalars(statement).one_or_none()
 
-    def update_event(self, event_id: UUID, payload: DanceEventUpdate) -> DanceEvent | None:
+    def update_event(self, event_id: UUID, payload: DanceEventUpdate, commit: bool = True) -> DanceEvent | None:
+        """Apply a partial update. With commit=False the change is only flushed, so a
+        caller can commit it together with dependent writes (or roll it all back)."""
         event = self.get_event(event_id)
         if event is None:
             return None
@@ -118,7 +121,10 @@ class EventService:
         if payload.status is None and event.status not in {"archived", "completed"}:
             event.status = _derive_event_status(event.required_session_count, confirmed_count)
         self.db.add(event)
-        self.db.commit()
+        if commit:
+            self.db.commit()
+        else:
+            self.db.flush()
         return self.get_event(event.id)
 
     def list_sessions(self, event_id: UUID) -> list[PracticeSession] | None:
@@ -127,13 +133,29 @@ class EventService:
             return None
         return sorted(event.practice_sessions, key=lambda item: (item.session_index, item.start_at))
 
-    def delete_event(self, event_id: UUID) -> bool:
-        event = self.db.get(DanceEvent, event_id)
+    def delete_event(
+        self, event_id: UUID, google_calendar_service: GoogleCalendarService | None = None
+    ) -> list[str] | None:
+        """Delete the dance and its sessions. Returns None if it does not exist, else the
+        warnings for confirmed sessions whose Google Calendar event could not be removed
+        (the dance is deleted regardless, so those events must be cleaned up by hand)."""
+        event = self.get_event(event_id)
         if event is None:
-            return False
+            return None
+        warnings: list[str] = []
+        if google_calendar_service is not None:
+            for session in event.practice_sessions:
+                if session.status != "confirmed" or not session.google_calendar_event_id:
+                    continue
+                try:
+                    google_calendar_service.delete_event_for_practice_session(session.id)
+                except (ValueError, RuntimeError) as exc:
+                    warnings.append(
+                        f"Practice {session.session_index} was removed but its Google Calendar event was not: {exc}"
+                    )
         self.db.delete(event)
         self.db.commit()
-        return True
+        return warnings
 
     def _validate_participants(self, user_ids: set[UUID]) -> None:
         if not user_ids:

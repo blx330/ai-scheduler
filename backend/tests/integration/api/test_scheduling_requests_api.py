@@ -206,3 +206,35 @@ def test_members_cannot_use_scheduling_requests(nl_client, world) -> None:
 
 def test_anonymous_users_cannot_use_scheduling_requests(anon_client) -> None:
     assert _parse(anon_client).status_code == 401
+
+
+def test_confirm_is_a_422_that_writes_nothing_when_the_planner_fails(nl_client, world, parser, monkeypatch) -> None:
+    from app.application.services.planning_service import PlanningService
+
+    parser.result = _example()
+    proposal = _parse(nl_client).json()["proposal"]
+
+    def exploding_run(self, payload):
+        raise ValueError("Room not found")
+
+    monkeypatch.setattr(PlanningService, "create_planning_run", exploding_run)
+    response = nl_client.post("/api/v1/scheduling-requests/confirm", json=proposal)
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["message"].startswith("Nothing was changed.")
+    assert any("Room not found" in error for error in response.json()["detail"]["errors"])
+    event = nl_client.get(f"/api/v1/events/{world['event']['id']}").json()
+    assert event["required_session_count"] == 1
+    assert event["blocked_weekdays"] == []
+    assert [item["user_id"] for item in event["participants"]] == [world["maya"]["id"]]
+
+
+def test_proposal_min_days_apart_is_bounded(nl_client, world, parser) -> None:
+    parser.result = _example()
+    proposal = _parse(nl_client).json()["proposal"]
+
+    response = nl_client.post("/api/v1/scheduling-requests/confirm", json={**proposal, "min_days_apart": 366})
+
+    assert response.status_code == 422
+    # Rejected by schema validation, not by the service's spacing check.
+    assert response.json()["detail"] == "min_days_apart: Input should be less than or equal to 365"

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time
+from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from app.domain.common.enums import Weekday
+
+MAX_MIN_DAYS_APART = 365
+EventName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
 
 
 def _validate_timezone_aware(value: datetime | None) -> datetime | None:
@@ -29,12 +33,12 @@ class DanceEventParticipantCreate(BaseModel):
 
 
 class DanceEventCreate(BaseModel):
-    name: str
+    name: EventName
     description: str | None = None
     organizer_user_id: UUID
     duration_minutes: int
     earliest_start_date: date | None = None
-    min_days_apart: int = 0
+    min_days_apart: int = Field(default=0, ge=0, le=MAX_MIN_DAYS_APART)
     latest_schedule_at: datetime
     required_session_count: int
     participants: list[DanceEventParticipantCreate]
@@ -62,12 +66,12 @@ class DanceEventCreate(BaseModel):
 
 
 class DanceEventUpdate(BaseModel):
-    name: str | None = None
+    name: EventName | None = None
     description: str | None = None
     organizer_user_id: UUID | None = None
     duration_minutes: int | None = None
     earliest_start_date: date | None = None
-    min_days_apart: int | None = None
+    min_days_apart: int | None = Field(default=None, ge=0, le=MAX_MIN_DAYS_APART)
     latest_schedule_at: datetime | None = None
     required_session_count: int | None = None
     status: str | None = None
@@ -102,6 +106,10 @@ class DanceEventUpdate(BaseModel):
         if value is not None and value not in {"unscheduled", "partially_scheduled", "scheduled", "completed", "archived"}:
             raise ValueError("Unsupported event status")
         return value
+
+
+class DanceEventDeleteWarnings(BaseModel):
+    warnings: list[str]
 
 
 class DanceEventParticipantRead(BaseModel):

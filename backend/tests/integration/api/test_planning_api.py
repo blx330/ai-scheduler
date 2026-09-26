@@ -1385,3 +1385,107 @@ def _create_planning_run(client, event_ids: list[str], horizon_start: str, horiz
             "slot_step_minutes": 60,
         },
     )
+
+
+def _confirm_one_session(client, app, fake_client, *, label: str) -> tuple[dict, dict]:
+    """Organizer with a Google connection; one confirmed session with a linked Google event."""
+    app.state.google_calendar_client = fake_client
+    organizer = _create_user(client, f"Coach {label}", f"coach-{label.lower()}@example.com")
+    dancer = _create_user(client, f"{label} Dancer", f"{label.lower()}-dancer@example.com")
+    _add_availability(client, dancer["id"], "2026-04-12T08:00:00Z", "2026-04-12T12:00:00Z")
+    _grant_google_connection(app, organizer["id"])
+    event = _create_event(
+        client,
+        name=f"{label} Dance",
+        organizer_user_id=organizer["id"],
+        duration_minutes=60,
+        latest_schedule_at="2026-04-12T12:00:00Z",
+        required_session_count=1,
+        participants=[{"user_id": dancer["id"], "role": "required"}],
+    )
+    planning_run = _create_planning_run(
+        client, event_ids=[event["id"]], horizon_start="2026-04-12T08:00:00Z", horizon_end="2026-04-12T12:00:00Z"
+    ).json()
+    result_id = planning_run["results"][0]["recommendations"][0]["id"]
+    confirm_response = client.post(f"/api/v1/planning-runs/{planning_run['id']}/confirm", json={"result_ids": [result_id]})
+    assert confirm_response.status_code == 200
+    return event, confirm_response.json()["confirmed_sessions"][0]
+
+
+class _RecordingGoogleClient(_FakeGoogleClientBase):
+    def __init__(self, delete_error: Exception | None = None) -> None:
+        self.deleted_events: list[tuple[str, str]] = []
+        self.delete_error = delete_error
+
+    def create_event(self, access_token, calendar_id, title, start_at, end_at, timezone_name, attendee_emails, description=None):
+        return GoogleCreatedEvent(
+            event_id="practice_evt_del", html_link=None, status="confirmed", calendar_id=calendar_id, start_at=start_at, end_at=end_at
+        )
+
+    def delete_event(self, access_token: str, calendar_id: str, event_id: str) -> None:
+        if self.delete_error is not None:
+            raise self.delete_error
+        self.deleted_events.append((calendar_id, event_id))
+
+
+def test_deleting_an_event_removes_its_google_calendar_events(client, app) -> None:
+    fake_client = _RecordingGoogleClient()
+    event, practice_session = _confirm_one_session(client, app, fake_client, label="Cleanup")
+    assert practice_session["google_calendar_event_id"] == "practice_evt_del"
+
+    delete_response = client.delete(f"/api/v1/events/{event['id']}")
+
+    assert delete_response.status_code == 204
+    assert fake_client.deleted_events == [("primary", "practice_evt_del")]
+    assert client.get(f"/api/v1/events/{event['id']}").status_code == 404
+
+
+def test_deleting_an_event_reports_google_cleanup_failures_as_warnings(client, app) -> None:
+    fake_client = _RecordingGoogleClient(delete_error=RuntimeError("Google Calendar event deletion failed: HTTP 503"))
+    event, _ = _confirm_one_session(client, app, fake_client, label="Warn")
+
+    delete_response = client.delete(f"/api/v1/events/{event['id']}")
+
+    assert delete_response.status_code == 200
+    warnings = delete_response.json()["warnings"]
+    assert len(warnings) == 1
+    assert "HTTP 503" in warnings[0]
+    assert client.get(f"/api/v1/events/{event['id']}").status_code == 404
+
+
+def test_event_schema_bounds_name_and_min_days_apart(client) -> None:
+    organizer = _create_user(client, "Coach Bounds", "coach-bounds@example.com")
+    base = {
+        "organizer_user_id": organizer["id"],
+        "duration_minutes": 60,
+        "latest_schedule_at": "2026-04-08T23:00:00Z",
+        "required_session_count": 1,
+        "participants": [{"user_id": organizer["id"], "role": "required"}],
+    }
+    assert client.post("/api/v1/events", json={**base, "name": "   "}).status_code == 422
+    assert client.post("/api/v1/events", json={**base, "name": "x" * 256}).status_code == 422
+    assert client.post("/api/v1/events", json={**base, "name": "Fine", "min_days_apart": 366}).status_code == 422
+
+    created = client.post("/api/v1/events", json={**base, "name": "  Trimmed  ", "min_days_apart": 365})
+    assert created.status_code == 201
+    assert created.json()["name"] == "Trimmed"
+    event_id = created.json()["id"]
+    assert client.patch(f"/api/v1/events/{event_id}", json={"min_days_apart": 366}).status_code == 422
+    assert client.patch(f"/api/v1/events/{event_id}", json={"name": ""}).status_code == 422
+
+
+def test_calendar_overview_caps_window_and_user_id_count(client) -> None:
+    too_long = client.get(
+        "/api/v1/calendar/overview", params={"start": "2026-01-01T00:00:00Z", "end": "2026-07-01T00:00:00Z"}
+    )
+    assert too_long.status_code == 422
+    just_fits = client.get(
+        "/api/v1/calendar/overview", params={"start": "2026-01-01T00:00:00Z", "end": "2026-06-30T00:00:00Z"}
+    )
+    assert just_fits.status_code == 200
+
+    too_many = client.get(
+        "/api/v1/calendar/overview",
+        params={"start": "2026-01-01T00:00:00Z", "end": "2026-01-02T00:00:00Z", "user_ids": [str(uuid4()) for _ in range(201)]},
+    )
+    assert too_many.status_code == 422

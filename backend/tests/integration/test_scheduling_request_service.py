@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime, time
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 
 from app.api.schemas.scheduling_requests import SchedulingProposal
 from app.application.services.scheduling_request_service import (
@@ -18,6 +19,7 @@ from app.infrastructure.db.models import (
     DanceEvent,
     DanceEventParticipant,
     ManualAvailabilityInterval,
+    PlanningRun,
     PracticeSession,
     Room,
     User,
@@ -410,3 +412,34 @@ def test_request_rules_that_contradict_saved_rules_are_rejected_not_crashed(db, 
         "Days cannot be both allowed and blocked: SAT "
         "(the blocked days were already saved on Hip Hop; state new ones to replace them).",
     ]
+
+
+def test_confirm_writes_nothing_when_the_planner_fails(db, world, monkeypatch) -> None:
+    from app.application.services.planning_service import PlanningService
+
+    review = _parse(db, session_count=3, required_attendees=["Maya Chen"], blocked_weekdays=["FRI"])
+    service, _ = _service(db, _request())
+
+    def exploding_run(self, payload):
+        raise ValueError("Planning horizon end must be after start")
+
+    monkeypatch.setattr(PlanningService, "create_planning_run", exploding_run)
+    with pytest.raises(SchedulingRequestRejected, match="Planning horizon end must be after start"):
+        service.confirm(review.proposal)
+
+    db.expire_all()
+    event = db.get(DanceEvent, world["event"].id)
+    assert event.required_session_count == 1
+    assert event.blocked_weekdays_json in (None, [])
+    assert {participant.user_id for participant in event.participants} == {world["sam"].id}
+    assert db.scalars(select(PlanningRun)).first() is None
+
+
+def test_first_name_matching_survives_a_blank_display_name(db, world) -> None:
+    # Legacy rows may hold whitespace-only names; matching must skip them, not crash.
+    db.add(User(display_name="   ", email="blank@example.com", timezone=NY))
+    db.commit()
+
+    review = _parse(db, required_attendees=["Maya"])
+
+    assert {item.display_name for item in review.participants} == {"Maya Chen", "Sam Park"}

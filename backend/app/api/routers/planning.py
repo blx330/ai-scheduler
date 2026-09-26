@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated
 from uuid import UUID
 
@@ -26,6 +26,9 @@ from app.infrastructure.config import Settings
 from app.infrastructure.integrations.google_calendar.client import GoogleCalendarProvider
 
 router = APIRouter(tags=["planning"])
+
+MAX_OVERVIEW_DAYS = 180
+MAX_OVERVIEW_USER_IDS = 200
 
 
 @router.post("/planning-runs", response_model=PlanningRunRead)
@@ -91,6 +94,10 @@ def get_calendar_overview(
     for value, name in ((start, "start"), (end, "end")):
         if value.tzinfo is None or value.utcoffset() is None:
             raise HTTPException(status_code=422, detail=f"{name}: Datetime must include timezone information")
+    if end - start > timedelta(days=MAX_OVERVIEW_DAYS):
+        raise HTTPException(status_code=422, detail=f"Calendar overview window cannot exceed {MAX_OVERVIEW_DAYS} days")
+    if len(user_ids) > MAX_OVERVIEW_USER_IDS:
+        raise HTTPException(status_code=422, detail=f"user_ids: at most {MAX_OVERVIEW_USER_IDS} entries")
     try:
         busy_intervals, practice_sessions = PlanningService(db).get_calendar_overview(
             start, end, user_ids=user_ids

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from urllib.parse import urlencode
 from uuid import UUID
 
@@ -23,6 +24,9 @@ from app.infrastructure.config import Settings
 from app.infrastructure.integrations.google_calendar.client import GoogleCalendarProvider
 
 router = APIRouter(tags=["google-calendar"])
+logger = logging.getLogger(__name__)
+
+GENERIC_OAUTH_ERROR = "Google Calendar connection failed. Please try again."
 
 
 @router.get("/google-calendar/auth", response_model=GoogleOAuthStartResponse)
@@ -66,12 +70,20 @@ def google_oauth_callback(
     client: GoogleCalendarProvider = Depends(get_google_calendar_client),
 ) -> RedirectResponse:
     service = GoogleCalendarService(db, settings, client)
+    # Google lands the browser here, so every outcome must be a redirect.
     try:
         redirect_url = service.complete_oauth(code=code, state=state)
-    except Exception as exc:  # noqa: BLE001 - callback should always redirect for the demo flow
-        query = urlencode({"google_error": str(exc)})
-        redirect_url = f"{settings.frontend_url.rstrip('/')}/?{query}"
+    except (ValueError, RuntimeError) as exc:
+        redirect_url = _error_redirect_url(settings, str(exc))
+    except Exception:
+        logger.exception("Google Calendar OAuth callback failed")
+        redirect_url = _error_redirect_url(settings, GENERIC_OAUTH_ERROR)
     return RedirectResponse(url=redirect_url)
+
+
+def _error_redirect_url(settings: Settings, message: str) -> str:
+    query = urlencode({"google_error": message})
+    return f"{settings.frontend_url.rstrip('/')}/?{query}"
 
 
 @router.get("/users/{user_id}/google/connection", response_model=GoogleCalendarConnectionRead)

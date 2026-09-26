@@ -24,7 +24,8 @@ class InvalidTokenError(ValueError):
 def sign_token(payload: dict[str, Any], secret: str, max_age_seconds: int) -> str:
     if not secret:
         raise RuntimeError("SESSION_SECRET env var is not set. Set it to a long random string (e.g. openssl rand -hex 32).")
-    body = {**payload, "iat": int(time.time()), "exp": int(time.time()) + max_age_seconds}
+    now = int(time.time())
+    body = {**payload, "iat": now, "exp": now + max_age_seconds}
     encoded_payload = _b64encode(json.dumps(body).encode("utf-8"))
     signature = hmac.new(secret.encode("utf-8"), encoded_payload.encode("utf-8"), hashlib.sha256).digest()
     return f"{encoded_payload}.{_b64encode(signature)}"
@@ -46,8 +47,18 @@ def verify_token(token: str, secret: str) -> dict[str, Any]:
     if not hmac.compare_digest(expected_signature, actual_signature):
         raise InvalidTokenError("Invalid token signature")
 
-    payload = json.loads(_b64decode(encoded_payload).decode("utf-8"))
-    if int(payload.get("exp", 0)) < int(time.time()):
+    # The signature only proves *we* minted the bytes, not that they still parse: a
+    # payload from an older token format must fail closed as an invalid token.
+    try:
+        payload = json.loads(_b64decode(encoded_payload).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise InvalidTokenError("Malformed token payload") from exc
+    if not isinstance(payload, dict):
+        raise InvalidTokenError("Malformed token payload")
+    exp = payload.get("exp")
+    if isinstance(exp, bool) or not isinstance(exp, int):
+        raise InvalidTokenError("Malformed token expiry")
+    if exp < int(time.time()):
         raise InvalidTokenError("Token expired")
     return payload
 

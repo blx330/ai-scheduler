@@ -2,6 +2,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.infrastructure.config import Settings
@@ -12,7 +13,12 @@ from app.infrastructure.integrations.google_calendar.client import (
     GoogleCreatedEvent,
     GoogleOAuthTokens,
 )
-from app.infrastructure.integrations.llm.profile_preference_parser import GeminiUserProfilePreferenceParser
+from app.infrastructure.integrations.llm.profile_preference_parser import (
+    GeminiUserProfilePreferenceParser,
+    ProfilePreferenceParseError,
+    ProfilePreferenceParserUnavailable,
+    ProfilePreferenceUpstreamError,
+)
 from app.main import create_app
 
 
@@ -144,6 +150,52 @@ def test_user_profile_caches_parsed_free_text_preferences(client, app) -> None:
     assert user["preferred_practice_time_summary"] == (
         "Understood: prefers weekends, avoids Fridays, never before 9:00 AM"
     )
+
+
+def test_user_schema_bounds_display_name_email_and_raw_preference(client) -> None:
+    base = {"timezone": "UTC"}
+    assert client.post("/api/v1/users", json={**base, "display_name": "   "}).status_code == 422
+    assert client.post("/api/v1/users", json={**base, "display_name": "x" * 256}).status_code == 422
+    long_email = "a" * 250 + "@example.com"
+    assert client.post("/api/v1/users", json={**base, "display_name": "Ok", "email": long_email}).status_code == 422
+    assert (
+        client.post(
+            "/api/v1/users", json={**base, "display_name": "Ok", "preferred_practice_time_raw": "w" * 1001}
+        ).status_code
+        == 422
+    )
+
+    created = client.post("/api/v1/users", json={**base, "display_name": "  Trimmed Name  "})
+    assert created.status_code == 201
+    assert created.json()["display_name"] == "Trimmed Name"
+    patched = client.patch(f"/api/v1/users/{created.json()['id']}", json={"preferred_practice_time_raw": "w" * 1001})
+    assert patched.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status"),
+    [
+        (ProfilePreferenceParserUnavailable("google-genai must be installed"), 503),
+        (ProfilePreferenceUpstreamError("Gemini request failed"), 502),
+        (ProfilePreferenceParseError("The model's response was not valid JSON."), 422),
+    ],
+)
+def test_profile_parser_failures_map_to_honest_status_codes(client, app, error, expected_status) -> None:
+    class FailingProfileParser:
+        version = "failing"
+
+        def parse(self, raw_text: str, timezone_name: str) -> dict:
+            raise error
+
+    app.state.user_profile_preference_parser = FailingProfileParser()
+
+    response = client.post(
+        "/api/v1/users",
+        json={"display_name": "Parse Fail", "timezone": "UTC", "preferred_practice_time_raw": "weekends"},
+    )
+
+    assert response.status_code == expected_status
+    assert response.json()["detail"] == str(error)
 
 
 def test_create_user_reuses_incomplete_registration_for_same_email(client) -> None:
@@ -468,6 +520,36 @@ def test_google_connection_with_identity_only_scope_requires_reconnect(client, a
     assert response.json()["status"] == "reauthorization_required"
 
 
+def test_google_connection_marked_for_reauthorization_reports_disconnected(client, app) -> None:
+    user = client.post(
+        "/api/v1/users",
+        json={"display_name": "Revoked User", "timezone": "UTC", "email": "revoked@example.com"},
+    ).json()
+
+    session = app.state.session_factory()
+    try:
+        session.add(
+            CalendarConnection(
+                user_id=user["id"],
+                provider="google",
+                status="reauthorization_required",
+                access_token="stale-token",
+                refresh_token="revoked-refresh-token",
+                scopes="https://www.googleapis.com/auth/calendar",
+                token_expires_at=datetime.now(UTC) - timedelta(hours=1),
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    response = client.get(f"/api/v1/users/{user['id']}/google/connection")
+
+    assert response.status_code == 200
+    assert response.json()["connected"] is False
+    assert response.json()["status"] == "reauthorization_required"
+
+
 def test_google_busy_sync_persists_selected_calendars_and_overview_returns_intervals(client, app) -> None:
     selected_calendar_id = "dance-team@example.com"
     synced_interval = GoogleBusyInterval(
@@ -604,6 +686,62 @@ def test_google_busy_sync_persists_selected_calendars_and_overview_returns_inter
     assert unscoped.json()["busy_intervals"] == []
     # confirmed practices remain visible; they are shared studio bookings
     assert "practice_sessions" in unscoped.json()
+
+
+def test_google_oauth_callback_does_not_leak_unexpected_exception_text(client, app) -> None:
+    class ExplodingGoogleClient:
+        def build_authorization_url(self, state: str) -> str:
+            return f"https://example.com/oauth?state={state}"
+
+        def exchange_code(self, code: str):
+            raise KeyError("internal-detail-that-must-not-leak")
+
+    app.state.google_calendar_client = ExplodingGoogleClient()
+    target_user = client.post(
+        "/api/v1/users",
+        json={"display_name": "OAuth Boom", "timezone": "UTC", "email": "oauth-boom@example.com"},
+    ).json()
+    authorization_url = client.post("/api/v1/google/oauth/start", json={"user_id": target_user["id"]}).json()[
+        "authorization_url"
+    ]
+    state = parse_qs(urlparse(authorization_url).query)["state"][0]
+
+    callback_response = client.get(
+        "/api/v1/google/oauth/callback",
+        params={"code": "auth-code", "state": state},
+        follow_redirects=False,
+    )
+
+    assert callback_response.status_code in {302, 307}
+    location = callback_response.headers["location"]
+    assert "internal-detail-that-must-not-leak" not in location
+    assert parse_qs(urlparse(location).query)["google_error"] == ["Google Calendar connection failed. Please try again."]
+
+
+def test_google_oauth_callback_surfaces_expected_errors_to_the_user(client, app) -> None:
+    class RejectingGoogleClient:
+        def build_authorization_url(self, state: str) -> str:
+            return f"https://example.com/oauth?state={state}"
+
+        def exchange_code(self, code: str):
+            raise RuntimeError("Google OAuth token exchange failed: invalid_grant")
+
+    app.state.google_calendar_client = RejectingGoogleClient()
+    target_user = client.post(
+        "/api/v1/users",
+        json={"display_name": "OAuth Reject", "timezone": "UTC", "email": "oauth-reject@example.com"},
+    ).json()
+    authorization_url = client.post("/api/v1/google/oauth/start", json={"user_id": target_user["id"]}).json()[
+        "authorization_url"
+    ]
+    state = parse_qs(urlparse(authorization_url).query)["state"][0]
+
+    callback_response = client.get(
+        "/api/v1/google/oauth/callback", params={"code": "auth-code", "state": state}, follow_redirects=False
+    )
+
+    location = callback_response.headers["location"]
+    assert parse_qs(urlparse(location).query)["google_error"] == ["Google OAuth token exchange failed: invalid_grant"]
 
 
 def test_google_oauth_state_links_connection_to_requested_user(client, app) -> None:

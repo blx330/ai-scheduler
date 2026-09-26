@@ -1,4 +1,5 @@
 import pytest
+import requests
 
 from app.infrastructure.integrations.google_identity.client import (
     GoogleIdentityClient,
@@ -113,3 +114,31 @@ def test_build_google_identity_client_falls_back_to_noop_when_unconfigured() -> 
 def test_build_google_identity_client_returns_real_client_when_fully_configured() -> None:
     provider = build_google_identity_client(client_id="id", client_secret="secret", redirect_uri="http://x/callback")
     assert isinstance(provider, GoogleIdentityClient)
+
+
+class _RaisingRequests:
+    def __init__(self, exc: Exception, fail_on: str) -> None:
+        self.exc = exc
+        self.fail_on = fail_on
+
+    def post(self, url, data=None, timeout=None):
+        if self.fail_on == "post":
+            raise self.exc
+        return FakeResponse(200, {"id_token": "fake-id-token"})
+
+    def get(self, url, params=None, timeout=None):
+        raise self.exc
+
+
+@pytest.mark.parametrize("fail_on", ["post", "get"])
+def test_network_failures_become_runtime_errors_without_leaking_urls_or_tokens(fail_on: str) -> None:
+    exc = requests.Timeout("https://oauth2.googleapis.com/tokeninfo?id_token=secret-id-token")
+    client = GoogleIdentityClient(client_id="client-id", client_secret="client-secret", redirect_uri="http://x/callback")
+    client._requests = lambda: _RaisingRequests(exc, fail_on)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        client.exchange_code("auth-code")
+    message = str(excinfo.value)
+    assert "secret" not in message
+    assert "http" not in message.lower()
+    assert excinfo.value.__cause__ is exc

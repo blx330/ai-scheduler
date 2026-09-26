@@ -5,6 +5,12 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.parse import urlencode
 
+try:
+    from requests import RequestException
+except ImportError:  # pragma: no cover - `_requests()` reports the missing dependency at call time
+    class RequestException(Exception):  # type: ignore[no-redef]
+        pass
+
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 # Google validates the id_token's signature server-side and hands back its claims --
@@ -52,8 +58,11 @@ class GoogleIdentityClient:
         return f"{GOOGLE_AUTH_URL}?{query}"
 
     def exchange_code(self, code: str) -> GoogleIdentity:
-        response = self._requests().post(
+        operation = "Google sign-in token exchange"
+        response = self._send(
+            "post",
             GOOGLE_TOKEN_URL,
+            operation,
             data={
                 "code": code,
                 "client_id": self.client_id,
@@ -61,17 +70,17 @@ class GoogleIdentityClient:
                 "redirect_uri": self.redirect_uri,
                 "grant_type": "authorization_code",
             },
-            timeout=30,
         )
-        self._raise_for_google_error(response, "Google sign-in token exchange")
+        self._raise_for_google_error(response, operation)
         id_token = response.json().get("id_token")
         if not id_token:
             raise RuntimeError("Google sign-in token exchange did not return an id_token")
         return self._verify_id_token(id_token)
 
     def _verify_id_token(self, id_token: str) -> GoogleIdentity:
-        response = self._requests().get(GOOGLE_TOKENINFO_URL, params={"id_token": id_token}, timeout=30)
-        self._raise_for_google_error(response, "Google sign-in token verification")
+        operation = "Google sign-in token verification"
+        response = self._send("get", GOOGLE_TOKENINFO_URL, operation, params={"id_token": id_token})
+        self._raise_for_google_error(response, operation)
         claims = response.json()
         if claims.get("aud") != self.client_id:
             raise RuntimeError("Google sign-in token was issued for a different app")
@@ -95,6 +104,13 @@ class GoogleIdentityClient:
         except ImportError as exc:
             raise RuntimeError("requests must be installed to use Google sign-in") from exc
         return requests
+
+    def _send(self, method: str, url: str, operation: str, **kwargs: Any) -> Any:
+        # Transport error text can include the URL and its id_token; keep it in the cause only.
+        try:
+            return getattr(self._requests(), method)(url, timeout=30, **kwargs)
+        except RequestException as exc:
+            raise RuntimeError(f"{operation} failed: could not reach Google. Please try again.") from exc
 
     @staticmethod
     def _raise_for_google_error(response: Any, operation: str) -> None:

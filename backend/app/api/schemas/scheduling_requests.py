@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from app.api.schemas.events import MAX_MIN_DAYS_APART
 from app.api.schemas.planning import PlanningRunRead
 from app.domain.common.enums import Weekday
 from app.domain.scheduling.requests import MAX_SESSIONS_PER_REQUEST, SchedulingRequest
@@ -36,7 +37,7 @@ class SchedulingProposal(BaseModel):
     session_count: int = Field(ge=1, le=MAX_SESSIONS_PER_REQUEST)
     earliest_date: date | None
     latest_date: date
-    min_days_apart: int = Field(ge=0)
+    min_days_apart: int = Field(ge=0, le=MAX_MIN_DAYS_APART)
     participants: list[ProposalParticipant] = Field(min_length=1)
     allowed_weekdays: list[Weekday]
     blocked_weekdays: list[Weekday]

@@ -9,10 +9,13 @@ open signup.
 
 from __future__ import annotations
 
+import hmac
+import secrets
 from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.domain.common.enums import UserRole
@@ -23,12 +26,23 @@ from app.infrastructure.integrations.google_identity.client import GoogleIdentit
 
 LOGIN_STATE_MAX_AGE_SECONDS = 10 * 60
 DEMO_GUEST_EMAIL = "demo-guest@ai-scheduler.local"
+# Fixed so the guest row the demo seed recreates on every reset keeps the same id,
+# and sessions issued before a reset stay valid.
+DEMO_GUEST_USER_ID = UUID("00000000-0000-4000-8000-0000000d3e00")
 
 
 @dataclass(frozen=True)
 class LoginResult:
     user: User
     session_token: str
+
+
+@dataclass(frozen=True)
+class LoginStart:
+    authorization_url: str
+    # Random value the browser holds in a short-lived cookie; the callback must present
+    # the same one, so a signed state cannot be replayed from a different browser.
+    nonce: str
 
 
 class UnknownGoogleAccountError(ValueError):
@@ -41,12 +55,13 @@ class AuthService:
         self.settings = settings
         self.identity_client = identity_client
 
-    def begin_login(self) -> str:
-        state = sign_token({"purpose": "login_state"}, self._secret(), LOGIN_STATE_MAX_AGE_SECONDS)
-        return self.identity_client.build_authorization_url(state)
+    def begin_login(self) -> LoginStart:
+        nonce = secrets.token_urlsafe(32)
+        state = sign_token({"purpose": "login_state", "nonce": nonce}, self._secret(), LOGIN_STATE_MAX_AGE_SECONDS)
+        return LoginStart(authorization_url=self.identity_client.build_authorization_url(state), nonce=nonce)
 
-    def complete_login(self, code: str, state: str) -> LoginResult:
-        self._verify_state(state)
+    def complete_login(self, code: str, state: str, nonce: str | None) -> LoginResult:
+        self._verify_state(state, nonce)
         identity = self.identity_client.exchange_code(code)
         user = self._resolve_user(identity)
         return LoginResult(user=user, session_token=self._issue_session(user))
@@ -55,20 +70,45 @@ class AuthService:
         """Log in as a shared, always-organizer guest profile. Only ever called from a
         route gated on ADMIN_RESET_TOKEN being set -- i.e. only on the public demo
         deployment, where "anyone can edit anything" is already the documented model."""
-        user = self.db.scalars(select(User).where(func.lower(User.email) == DEMO_GUEST_EMAIL)).first()
+        user = self._find_demo_guest()
         if user is None:
-            user = User(display_name="Demo Guest", email=DEMO_GUEST_EMAIL, timezone="UTC", role=UserRole.ORGANIZER.value)
+            user = User(
+                id=DEMO_GUEST_USER_ID,
+                display_name="Demo Guest",
+                email=DEMO_GUEST_EMAIL,
+                timezone="America/New_York",
+                role=UserRole.ORGANIZER.value,
+            )
             self.db.add(user)
-            self.db.commit()
+            try:
+                self.db.commit()
+            except IntegrityError:
+                # Two first visitors raced to create the guest; reuse the winner's row.
+                self.db.rollback()
+                user = self._find_demo_guest()
+                if user is None:
+                    raise
             self.db.refresh(user)
         return LoginResult(user=user, session_token=self._issue_session(user))
 
+    def _find_demo_guest(self) -> User | None:
+        user = self.db.get(User, DEMO_GUEST_USER_ID)
+        if user is None:
+            user = self.db.scalars(select(User).where(func.lower(User.email) == DEMO_GUEST_EMAIL)).first()
+        return user
+
     def _resolve_user(self, identity: GoogleIdentity) -> User:
         user = self.db.scalars(select(User).where(User.google_subject_id == identity.subject)).first()
+        # An unverified email proves nothing about who owns it; only the stable Google
+        # subject id may be trusted for such an account.
+        if user is None and not identity.email_verified:
+            raise UnknownGoogleAccountError(
+                f"Google has not verified the email {identity.email}, so it cannot be matched to a team profile."
+            )
         if user is None:
             user = self.db.scalars(select(User).where(func.lower(User.email) == identity.email)).first()
 
-        is_admin_email = identity.email in self.settings.admin_emails
+        is_admin_email = identity.email_verified and identity.email in self.settings.admin_emails
         if user is None:
             if not is_admin_email:
                 raise UnknownGoogleAccountError(
@@ -98,13 +138,16 @@ class AuthService:
             max_age_seconds,
         )
 
-    def _verify_state(self, state: str) -> None:
+    def _verify_state(self, state: str, nonce: str | None) -> None:
         try:
             payload = verify_token(state, self._secret())
         except InvalidTokenError as exc:
             raise ValueError("Invalid or expired sign-in attempt. Please try again.") from exc
         if payload.get("purpose") != "login_state":
             raise ValueError("Invalid sign-in state")
+        expected_nonce = payload.get("nonce")
+        if not nonce or not isinstance(expected_nonce, str) or not hmac.compare_digest(expected_nonce, nonce):
+            raise ValueError("Invalid or expired sign-in attempt. Please try again.")
 
     def _secret(self) -> str:
         if not self.settings.session_secret:
@@ -128,4 +171,11 @@ def decode_session(token: str, secret: str) -> SessionIdentity:
     payload = verify_token(token, secret)
     if payload.get("purpose") != "session":
         raise InvalidTokenError("Not a session token")
-    return SessionIdentity(user_id=UUID(payload["sub"]), role=payload.get("role", UserRole.MEMBER.value))
+    subject = payload.get("sub")
+    if not isinstance(subject, str):
+        raise InvalidTokenError("Session token has no subject")
+    try:
+        user_id = UUID(subject)
+    except ValueError as exc:
+        raise InvalidTokenError("Session token subject is not a user id") from exc
+    return SessionIdentity(user_id=user_id, role=payload.get("role", UserRole.MEMBER.value))

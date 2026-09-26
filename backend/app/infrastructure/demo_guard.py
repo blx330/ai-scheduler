@@ -2,10 +2,11 @@
 
 Both the rate limiter and the row cap are no-ops unless ADMIN_RESET_TOKEN is set
 (the same signal that gates the admin reset endpoint) -- local dev, tests, and any
-non-demo deployment are completely unaffected. This is deliberately blunt: it does
-not stop one visitor from editing another's data (there's no auth for that), only
-bounds how much a bot or a bad actor can spam between scheduled demo resets. State
-is in-memory, matching the app's existing single-process assumption.
+non-demo deployment are completely unaffected. This is deliberately blunt: every
+visitor shares the same guest organizer login, so it does not stop one visitor from
+editing another's data, only bounds how much a bot or a bad actor can spam between
+scheduled demo resets. State is in-memory, matching the app's existing
+single-process assumption.
 """
 
 from __future__ import annotations
@@ -20,7 +21,8 @@ from starlette.responses import JSONResponse
 
 from app.infrastructure.db.models import DanceEvent, ManualAvailabilityInterval, User
 
-DEMO_ROW_LIMIT = 400
+# The seed itself uses roughly a quarter of this (see tests/integration/test_demo_seed.py).
+DEMO_ROW_LIMIT = 1000
 RATE_LIMIT_MAX_REQUESTS = 30
 RATE_LIMIT_WINDOW_SECONDS = 60.0
 
@@ -34,14 +36,21 @@ class SlidingWindowRateLimiter:
         self._hits: dict[str, deque[float]] = defaultdict(deque)
 
     def allow(self, key: str, now: float) -> bool:
-        hits = self._hits[key]
         cutoff = now - self._window_seconds
+        self._evict_idle_keys(cutoff)
+        hits = self._hits[key]
         while hits and hits[0] < cutoff:
             hits.popleft()
         if len(hits) >= self._max_requests:
             return False
         hits.append(now)
         return True
+
+    def _evict_idle_keys(self, cutoff: float) -> None:
+        # Without this every client IP ever seen stays in memory for the process lifetime.
+        idle = [key for key, hits in self._hits.items() if not hits or hits[-1] < cutoff]
+        for key in idle:
+            del self._hits[key]
 
 
 class DemoGuardMiddleware(BaseHTTPMiddleware):

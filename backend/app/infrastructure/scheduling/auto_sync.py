@@ -15,6 +15,10 @@ from app.infrastructure.integrations.google_calendar.client import GoogleCalenda
 logger = logging.getLogger(__name__)
 
 _SYNCABLE_STATUSES = ("connected", "configured")
+# Google's OAuth error code for a refresh token that was revoked or expired for good.
+# Retrying it every sweep is pointless; only the member reconnecting can fix it.
+REVOKED_GRANT_MARKER = "invalid_grant"
+REAUTHORIZATION_REQUIRED = "reauthorization_required"
 
 
 def sync_all_connections(
@@ -39,10 +43,29 @@ def sync_all_connections(
         for user_id in connection_ids:
             try:
                 service.sync_busy_intervals(user_id=user_id, horizon_start=now, horizon_end=horizon_end)
-            except (ValueError, RuntimeError):
-                logger.warning("Auto-sync failed for user %s", user_id, exc_info=True)
+            except RuntimeError as exc:
+                if REVOKED_GRANT_MARKER in str(exc):
+                    _mark_reauthorization_required(db, user_id)
+                    logger.warning("Auto-sync: Google grant revoked for user %s; needs reconnect", user_id)
+                else:
+                    logger.warning("Auto-sync failed for user %s", user_id, exc_info=True)
+            except Exception:
+                logger.exception("Auto-sync failed unexpectedly for user %s", user_id)
     finally:
         db.close()
+
+
+def _mark_reauthorization_required(db: Session, user_id) -> None:
+    # The failed sync may have left pending changes on the session; drop them so only
+    # the status change is written.
+    db.rollback()
+    for connection in db.scalars(
+        select(CalendarConnection)
+        .where(CalendarConnection.user_id == user_id)
+        .where(CalendarConnection.status.in_(_SYNCABLE_STATUSES))
+    ):
+        connection.status = REAUTHORIZATION_REQUIRED
+    db.commit()
 
 
 async def auto_sync_loop(

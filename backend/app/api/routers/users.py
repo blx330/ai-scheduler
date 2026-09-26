@@ -14,7 +14,12 @@ from app.api.schemas.auth import UserRoleUpdate
 from app.api.schemas.users import UserCreate, UserRead, UserUpdate
 from app.application.services.auth_service import SessionIdentity
 from app.application.services.user_service import UserService
-from app.infrastructure.integrations.llm.profile_preference_parser import UserProfilePreferenceParser
+from app.infrastructure.integrations.llm.profile_preference_parser import (
+    ProfilePreferenceParseError,
+    ProfilePreferenceParserUnavailable,
+    ProfilePreferenceUpstreamError,
+    UserProfilePreferenceParser,
+)
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -28,6 +33,12 @@ def create_user(
 ) -> UserRead:
     try:
         user = UserService(db).create_user(payload, preference_parser=preference_parser)
+    except ProfilePreferenceParserUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except ProfilePreferenceUpstreamError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except ProfilePreferenceParseError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return UserRead.model_validate(user)
@@ -57,6 +68,12 @@ def update_user(
 ) -> UserRead:
     try:
         user = UserService(db).update_user(user_id, payload, preference_parser=preference_parser)
+    except ProfilePreferenceParserUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except ProfilePreferenceUpstreamError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except ProfilePreferenceParseError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if user is None:

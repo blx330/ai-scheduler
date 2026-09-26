@@ -6,6 +6,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 from urllib.parse import quote, urlencode
 
+try:
+    from requests import RequestException
+except ImportError:  # pragma: no cover - `_requests()` reports the missing dependency at call time
+    class RequestException(Exception):  # type: ignore[no-redef]
+        pass
+
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
@@ -134,8 +140,11 @@ class GoogleCalendarClient:
         return f"{GOOGLE_AUTH_URL}?{query}"
 
     def exchange_code(self, code: str) -> GoogleOAuthTokens:
-        response = self._requests().post(
+        operation = "Google OAuth token exchange"
+        response = self._send(
+            "post",
             GOOGLE_TOKEN_URL,
+            operation,
             data={
                 "code": code,
                 "client_id": self.client_id,
@@ -143,23 +152,24 @@ class GoogleCalendarClient:
                 "redirect_uri": self.redirect_uri,
                 "grant_type": "authorization_code",
             },
-            timeout=30,
         )
-        self._raise_for_google_error(response, "Google OAuth token exchange")
+        self._raise_for_google_error(response, operation)
         return self._build_tokens(response.json())
 
     def refresh_access_token(self, refresh_token: str) -> GoogleOAuthTokens:
-        response = self._requests().post(
+        operation = "Google OAuth token refresh"
+        response = self._send(
+            "post",
             GOOGLE_TOKEN_URL,
+            operation,
             data={
                 "client_id": self.client_id,
                 "client_secret": self.client_secret,
                 "refresh_token": refresh_token,
                 "grant_type": "refresh_token",
             },
-            timeout=30,
         )
-        self._raise_for_google_error(response, "Google OAuth token refresh")
+        self._raise_for_google_error(response, operation)
         payload = response.json()
         payload["refresh_token"] = refresh_token
         return self._build_tokens(payload)
@@ -171,11 +181,12 @@ class GoogleCalendarClient:
         calendars: list[GoogleCalendarSummary] = []
         params: dict[str, object] = {"minAccessRole": "reader", "maxResults": 250}
         for _ in range(MAX_CALENDAR_LIST_PAGES):
-            response = self._requests().get(
+            response = self._send(
+                "get",
                 GOOGLE_CALENDAR_LIST_URL,
+                "Google Calendar list",
                 headers=self._auth_headers(access_token),
                 params=params,
-                timeout=30,
             )
             self._raise_for_google_error(response, "Google Calendar list")
             payload = response.json()
@@ -207,17 +218,19 @@ class GoogleCalendarClient:
         time_min: datetime,
         time_max: datetime,
     ) -> list[GoogleBusyInterval]:
-        response = self._requests().post(
+        operation = "Google Calendar free/busy lookup"
+        response = self._send(
+            "post",
             GOOGLE_FREEBUSY_URL,
+            operation,
             headers=self._auth_headers(access_token),
             json={
                 "timeMin": time_min.astimezone(UTC).isoformat(),
                 "timeMax": time_max.astimezone(UTC).isoformat(),
                 "items": [{"id": calendar_id} for calendar_id in calendar_ids],
             },
-            timeout=30,
         )
-        self._raise_for_google_error(response, "Google Calendar free/busy lookup")
+        self._raise_for_google_error(response, operation)
         payload = response.json()
         results: list[GoogleBusyInterval] = []
         failed: list[str] = []
@@ -258,8 +271,11 @@ class GoogleCalendarClient:
         description: str | None = None,
     ) -> GoogleCreatedEvent:
         encoded_calendar_id = quote(calendar_id, safe="")
-        response = self._requests().post(
+        operation = "Google Calendar event creation"
+        response = self._send(
+            "post",
             GOOGLE_EVENTS_URL_TEMPLATE.format(calendar_id=encoded_calendar_id),
+            operation,
             headers=self._auth_headers(access_token),
             json={
                 "summary": title,
@@ -274,9 +290,8 @@ class GoogleCalendarClient:
                 },
                 "attendees": [{"email": email} for email in attendee_emails],
             },
-            timeout=30,
         )
-        self._raise_for_google_error(response, "Google Calendar event creation")
+        self._raise_for_google_error(response, operation)
         payload = response.json()
         return GoogleCreatedEvent(
             event_id=payload["id"],
@@ -298,8 +313,11 @@ class GoogleCalendarClient:
     ) -> GoogleCreatedEvent:
         encoded_calendar_id = quote(calendar_id, safe="")
         encoded_event_id = quote(event_id, safe="")
-        response = self._requests().patch(
+        operation = "Google Calendar event update"
+        response = self._send(
+            "patch",
             f"{GOOGLE_EVENTS_URL_TEMPLATE.format(calendar_id=encoded_calendar_id)}/{encoded_event_id}",
+            operation,
             headers=self._auth_headers(access_token),
             json={
                 "start": {
@@ -311,9 +329,8 @@ class GoogleCalendarClient:
                     "timeZone": timezone_name,
                 },
             },
-            timeout=30,
         )
-        self._raise_for_google_error(response, "Google Calendar event update")
+        self._raise_for_google_error(response, operation)
         payload = response.json()
         return GoogleCreatedEvent(
             event_id=payload["id"],
@@ -332,12 +349,14 @@ class GoogleCalendarClient:
     ) -> None:
         encoded_calendar_id = quote(calendar_id, safe="")
         encoded_event_id = quote(event_id, safe="")
-        response = self._requests().delete(
+        operation = "Google Calendar event deletion"
+        response = self._send(
+            "delete",
             f"{GOOGLE_EVENTS_URL_TEMPLATE.format(calendar_id=encoded_calendar_id)}/{encoded_event_id}",
+            operation,
             headers=self._auth_headers(access_token),
-            timeout=30,
         )
-        self._raise_for_google_error(response, "Google Calendar event deletion")
+        self._raise_for_google_error(response, operation)
 
     @staticmethod
     def _requests():
@@ -346,6 +365,14 @@ class GoogleCalendarClient:
         except ImportError as exc:
             raise RuntimeError("requests must be installed to use Google Calendar integration") from exc
         return requests
+
+    def _send(self, method: str, url: str, operation: str, **kwargs: Any) -> Any:
+        # The transport error text can carry the URL (and so query-string tokens);
+        # callers surface these messages to users, so keep it in the cause only.
+        try:
+            return getattr(self._requests(), method)(url, timeout=30, **kwargs)
+        except RequestException as exc:
+            raise RuntimeError(f"{operation} failed: could not reach Google. Please try again.") from exc
 
     @staticmethod
     def _auth_headers(access_token: str) -> dict[str, str]:
@@ -382,6 +409,13 @@ class GoogleCalendarClient:
 
         if isinstance(payload, dict):
             error_payload = payload.get("error")
+            # OAuth token endpoint shape: {"error": "invalid_grant", "error_description": "..."}.
+            # Keep the code: callers key off it to tell a revoked grant from a blip.
+            if isinstance(error_payload, str) and error_payload.strip():
+                description = payload.get("error_description")
+                if isinstance(description, str) and description.strip():
+                    return f"{error_payload.strip()}: {description.strip()}"
+                return error_payload.strip()
             if isinstance(error_payload, dict):
                 message = error_payload.get("message")
                 if isinstance(message, str) and message.strip():

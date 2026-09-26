@@ -208,12 +208,19 @@ class SchedulingRequestService:
             earliest_start_time=plan.rules.earliest_start_local,
             latest_end_time=plan.rules.latest_end_local,
         )
+        # The event update is only flushed; the planner's commit covers both, so a
+        # planner failure leaves the event exactly as it was.
         try:
-            updated = EventService(self.db).update_event(event.id, update)
+            updated = EventService(self.db).update_event(event.id, update, commit=False)
         except ValueError as exc:
+            self.db.rollback()
             raise SchedulingRequestRejected([str(exc)]) from exc
         assert updated is not None
-        run = PlanningService(self.db).create_planning_run(run_request)
+        try:
+            run = PlanningService(self.db).create_planning_run(run_request)
+        except ValueError as exc:
+            self.db.rollback()
+            raise SchedulingRequestRejected([f"The planner could not run, so nothing was saved: {exc}"]) from exc
         return updated, run
 
     # --- shared validation --------------------------------------------------------------
@@ -440,7 +447,7 @@ def _match_event(name: str, events: list[DanceEvent], errors: list[str]) -> Danc
 def _match_member(name: str, users: list[User], errors: list[str]) -> User | None:
     matches = [user for user in users if user.display_name.casefold() == name.casefold()]
     if not matches and " " not in name.strip():
-        matches = [user for user in users if user.display_name.split()[0].casefold() == name.casefold()]
+        matches = [user for user in users if _first_name(user.display_name).casefold() == name.casefold()]
     if not matches:
         errors.append(f'Unknown member "{name}". {_known("members", [user.display_name for user in users])}')
         return None
@@ -449,6 +456,11 @@ def _match_member(name: str, users: list[User], errors: list[str]) -> User | Non
         errors.append(f'"{name}" matches more than one member ({names}). Use their full name.')
         return None
     return matches[0]
+
+
+def _first_name(display_name: str) -> str:
+    parts = display_name.split()
+    return parts[0] if parts else ""
 
 
 def _match_room(name: str, rooms: list[Room], errors: list[str]) -> Room | None:

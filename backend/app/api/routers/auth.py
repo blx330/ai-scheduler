@@ -14,25 +14,43 @@ from app.api.deps import (
     get_settings,
 )
 from app.api.schemas.auth import CurrentUserRead
-from app.application.services.auth_service import AuthService, SessionIdentity, UnknownGoogleAccountError
+from app.application.services.auth_service import (
+    LOGIN_STATE_MAX_AGE_SECONDS,
+    AuthService,
+    SessionIdentity,
+    UnknownGoogleAccountError,
+)
 from app.infrastructure.config import Settings
 from app.infrastructure.db.models import User
 from app.infrastructure.integrations.google_identity.client import GoogleIdentityProvider
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+LOGIN_NONCE_COOKIE_NAME = "login_nonce"
+
 
 @router.get("/google/login")
 def start_google_login(
+    request: Request,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     client: GoogleIdentityProvider = Depends(get_google_identity_client),
 ):
     try:
-        authorization_url = AuthService(db, settings, client).begin_login()
+        start = AuthService(db, settings, client).begin_login()
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return _redirect(authorization_url)
+    redirect = _redirect(start.authorization_url)
+    redirect.set_cookie(
+        key=LOGIN_NONCE_COOKIE_NAME,
+        value=start.nonce,
+        max_age=LOGIN_STATE_MAX_AGE_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+        path="/",
+    )
+    return redirect
 
 
 @router.get("/google/callback")
@@ -45,13 +63,16 @@ def google_login_callback(
     client: GoogleIdentityProvider = Depends(get_google_identity_client),
 ):
     try:
-        result = AuthService(db, settings, client).complete_login(code=code, state=state)
+        result = AuthService(db, settings, client).complete_login(
+            code=code, state=state, nonce=request.cookies.get(LOGIN_NONCE_COOKIE_NAME)
+        )
     except UnknownGoogleAccountError as exc:
         return _redirect_with_error(settings, str(exc))
     except (ValueError, RuntimeError) as exc:
         return _redirect_with_error(settings, str(exc))
 
     redirect = _redirect(settings.frontend_url)
+    redirect.delete_cookie(LOGIN_NONCE_COOKIE_NAME, path="/")
     _set_session_cookie(redirect, request, settings, result.session_token)
     return redirect
 

@@ -20,7 +20,8 @@ def reset_demo_endpoint(
         # Only wired up once a deployment explicitly opts into being a public demo
         # (by setting ADMIN_RESET_TOKEN) -- absent that, this route doesn't exist.
         raise HTTPException(status_code=404, detail="Not found")
-    if not x_admin_token or not hmac.compare_digest(x_admin_token, settings.admin_reset_token):
+    # Bytes: compare_digest raises TypeError (a 500) on non-ASCII str input.
+    if not x_admin_token or not hmac.compare_digest(x_admin_token.encode(), settings.admin_reset_token.encode()):
         raise HTTPException(status_code=401, detail="Invalid admin token")
 
     reset_demo(db)
