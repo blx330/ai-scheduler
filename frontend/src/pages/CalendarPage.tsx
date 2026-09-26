@@ -30,6 +30,7 @@ import {
   planningHorizonStart,
 } from "@/lib/calendarGrid";
 import { buildEventColorMap } from "@/lib/eventColor";
+import { initialVisibleMemberIds } from "@/lib/members";
 import { buildMemberColorMap } from "@/lib/userColor";
 import { localPartsToIso } from "@/lib/datetime";
 import type {
@@ -97,8 +98,12 @@ export function CalendarPage() {
   useEffect(() => {
     if (!users) return;
     const liveIds = new Set(users.map((u) => u.id));
-    const newIds = users.filter((u) => !autoVisibleMemberIds.current.has(u.id)).map((u) => u.id);
-    for (const id of newIds) autoVisibleMemberIds.current.add(id);
+    const firstLoad = autoVisibleMemberIds.current.size === 0;
+    const unseenIds = users.filter((u) => !autoVisibleMemberIds.current.has(u.id)).map((u) => u.id);
+    // On first load only a few members start visible (see initialVisibleMemberIds);
+    // a member added later while the page is open is shown right away.
+    const newIds = firstLoad ? [...initialVisibleMemberIds(unseenIds)] : unseenIds;
+    for (const id of unseenIds) autoVisibleMemberIds.current.add(id);
     for (const id of [...autoVisibleMemberIds.current]) {
       if (!liveIds.has(id)) autoVisibleMemberIds.current.delete(id);
     }
