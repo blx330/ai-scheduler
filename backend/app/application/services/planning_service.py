@@ -425,8 +425,15 @@ class PlanningService:
                 conflicting_end_at=conflict.end_at,
             )
 
+        # The engine scored the slot this session came from, not the one it is moving
+        # to. Keep the session (identity, room, Google event) and record the move
+        # honestly instead of carrying a score that describes a different time.
+        original_start = ensure_utc(session.start_at)
         session.start_at = start_at
         session.end_at = end_at
+        session.total_score = None
+        session.score_breakdown_json = {}
+        session.explanation_json = _manual_reschedule_explanation(session, original_start)
         self.db.add(session)
         self.db.commit()
         self.db.refresh(session)
@@ -834,6 +841,20 @@ def _manual_override_explanation(result: PlanningRunResult) -> dict:
             }
         ],
         "missing_required_user_ids": [str(user_id) for user_id in (result.missing_required_user_ids_json or [])],
+    }
+
+
+def _manual_reschedule_explanation(session: PracticeSession, original_start: datetime) -> dict:
+    original = original_start.isoformat().replace("+00:00", "Z")
+    return {
+        "summary": "Moved by the organizer, so no engine score applies to this session.",
+        "reasons": [
+            {
+                "code": "manual_reschedule",
+                "message": f"The organizer moved this session from {original}.",
+            }
+        ],
+        "missing_required_user_ids": [str(user_id) for user_id in (session.missing_required_user_ids_json or [])],
     }
 
 

@@ -1059,6 +1059,22 @@ def test_reschedule_moves_confirmed_session_and_updates_google_event(client, app
         ("primary", "practice_evt_reschedule", datetime(2026, 4, 12, 11, 0, tzinfo=UTC), datetime(2026, 4, 12, 12, 0, tzinfo=UTC))
     ]
 
+    # Moving is an in-place edit: the same session keeps its identity and links.
+    moved = body["practice"]
+    assert moved["id"] == practice_session["id"]
+    assert moved["dance_event_id"] == event["id"]
+    assert moved["session_index"] == practice_session["session_index"]
+    assert moved["room_id"] == practice_session["room_id"]
+    assert moved["source_run_id"] == practice_session["source_run_id"]
+    assert moved["google_calendar_event_id"] == "practice_evt_reschedule"
+    assert moved["google_calendar_html_link"] == "https://calendar.google.com/event?eid=practice_evt_reschedule&updated=1"
+    # ...but the engine never scored the new time, so the old score must not be
+    # presented as if it described it.
+    assert moved["total_score"] is None
+    assert moved["score_breakdown"] == {}
+    assert moved["explanation"]["reasons"][0]["code"] == "manual_reschedule"
+    assert "2026-04-12T" in moved["explanation"]["reasons"][0]["message"]
+
 
 def test_reschedule_room_conflict_requires_override_then_succeeds(client) -> None:
     organizer = _create_user(client, "Coach Room Conflict", "coach-room-conflict@example.com")
