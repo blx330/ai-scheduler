@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ParticipantPicker } from "./ParticipantPicker";
 import type { UserRead } from "@/api/types";
+import { buildMemberColorMap } from "@/lib/userColor";
 
 function makeUser(overrides: Partial<UserRead>): UserRead {
   return {
@@ -21,13 +22,13 @@ function makeUser(overrides: Partial<UserRead>): UserRead {
 
 describe("ParticipantPicker", () => {
   it("prompts to add members when there are none yet", () => {
-    render(<ParticipantPicker users={[]} value={{}} onChange={vi.fn()} />);
+    render(<ParticipantPicker users={[]} memberColorMap={new Map()} value={{}} onChange={vi.fn()} />);
     expect(screen.getByText(/add members first/i)).toBeInTheDocument();
   });
 
   it("lists every user with their current selection", () => {
     const users = [makeUser({ id: "u1", display_name: "Alice" }), makeUser({ id: "u2", display_name: "Bob" })];
-    render(<ParticipantPicker users={users} value={{ u1: "required" }} onChange={vi.fn()} />);
+    render(<ParticipantPicker users={users} memberColorMap={buildMemberColorMap(["u1", "u2"])} value={{ u1: "required" }} onChange={vi.fn()} />);
 
     expect(screen.getByText("Alice")).toBeInTheDocument();
     expect(screen.getByText("Bob")).toBeInTheDocument();

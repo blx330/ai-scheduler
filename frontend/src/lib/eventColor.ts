@@ -1,4 +1,4 @@
-import { hashIndex } from "@/lib/hash";
+import { assignPaletteSlots, hashIndex } from "@/lib/hash";
 
 const PALETTE = [
   "#22c55e",
@@ -13,4 +13,13 @@ const PALETTE = [
 
 export function eventColor(id: string): string {
   return PALETTE[hashIndex(id, PALETTE.length)];
+}
+
+/**
+ * Distinct color per dance (up to the palette size). `eventColor` alone is a plain
+ * hash, so with a handful of dances two routinely landed on the same color and were
+ * indistinguishable on the grid.
+ */
+export function buildEventColorMap(eventIds: readonly string[]): Map<string, string> {
+  return assignPaletteSlots(eventIds, PALETTE);
 }

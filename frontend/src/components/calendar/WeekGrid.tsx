@@ -1,10 +1,18 @@
-import { useMemo, type MouseEvent, type RefObject } from "react";
+import { useMemo, type KeyboardEvent, type MouseEvent, type RefObject } from "react";
 import { format } from "date-fns";
-import { X } from "lucide-react";
+import { Check, X } from "lucide-react";
 
 import { CalendarBlock } from "@/components/calendar/CalendarBlock";
 import type { DragPreview } from "@/hooks/use-block-drag";
-import { DAY_START_MIN, NUM_HOURS, PX_PER_MIN, fmtHourLabel, gridPlacement } from "@/lib/calendarGrid";
+import {
+  DAY_START_MIN,
+  NUM_HOURS,
+  PX_PER_MIN,
+  assignLanes,
+  clampDurationToDay,
+  fmtHourLabel,
+  gridPlacement,
+} from "@/lib/calendarGrid";
 import { eventColor } from "@/lib/eventColor";
 import type {
   CalendarOverviewRead,
@@ -26,6 +34,14 @@ function blockTooltip(rec: PlanningRecommendationRead, usersById: Map<string, Us
   return `Score ${rec.total_score.toFixed(2)}\n\nParticipants:\n${statuses}\n\nScore breakdown:\n${score}`;
 }
 
+function durationBetween(startIso: string, endIso: string): number {
+  return Math.round((new Date(endIso).getTime() - new Date(startIso).getTime()) / 60000);
+}
+
+function isActivationKey(e: KeyboardEvent): boolean {
+  return e.key === "Enter" || e.key === " ";
+}
+
 interface WeekGridProps {
   days: Date[];
   dayDateStrings: string[];
@@ -35,6 +51,7 @@ interface WeekGridProps {
   checkedIds: Set<string>;
   visibleMemberIds: Set<string>;
   memberColorMap: Map<string, string>;
+  eventColorMap: Map<string, string>;
   activeRun: PlanningRunRead | null;
   dismissedResultIds: Set<string>;
   dragPreview: DragPreview | null;
@@ -50,6 +67,7 @@ interface WeekGridProps {
     durationMin: number,
   ) => void;
   onStartConfirmedDrag: (e: MouseEvent, session: PracticeSessionRead, day: number, startMin: number, durationMin: number) => void;
+  onConfirmSuggestion: (group: PlanningSessionRecommendationGroup, rec: PlanningRecommendationRead) => void;
   onDismissSuggestion: (recId: string) => void;
 }
 
@@ -62,6 +80,7 @@ export function WeekGrid({
   checkedIds,
   visibleMemberIds,
   memberColorMap,
+  eventColorMap,
   activeRun,
   dismissedResultIds,
   dragPreview,
@@ -70,6 +89,7 @@ export function WeekGrid({
   scrollContainerRef,
   onStartSuggestedDrag,
   onStartConfirmedDrag,
+  onConfirmSuggestion,
   onDismissSuggestion,
 }: WeekGridProps) {
   const hourLabels = Array.from({ length: NUM_HOURS + 1 }, (_, i) => fmtHourLabel(DAY_START_MIN + i * 60));
@@ -78,6 +98,7 @@ export function WeekGrid({
     if (!activeRun) return [];
     const blocks: Array<{
       key: string;
+      recId: string;
       day: number;
       startMin: number;
       durationMin: number;
@@ -97,13 +118,13 @@ export function WeekGrid({
       const preview = dragPreview?.kind === "suggested" && dragPreview.id === rec.id ? dragPreview : null;
       const placement = preview ?? gridPlacement(rec.start_at, dayDateStrings);
       if (!placement) continue;
-      const durationMin = Math.round((new Date(rec.end_at).getTime() - new Date(rec.start_at).getTime()) / 60000);
       blocks.push({
         key: `suggested-${rec.id}`,
+        recId: rec.id,
         day: placement.day,
         startMin: placement.startMin,
-        durationMin,
-        color: eventColor(group.dance_event_id),
+        durationMin: clampDurationToDay(placement.startMin, durationBetween(rec.start_at, rec.end_at)),
+        color: eventColorMap.get(group.dance_event_id) ?? eventColor(group.dance_event_id),
         label: `${group.dance_name} (suggested)`,
         timeLabel: fmtHourLabel(placement.startMin),
         isFallback: rec.is_fallback,
@@ -113,57 +134,26 @@ export function WeekGrid({
       });
     }
     return blocks;
-  }, [activeRun, dismissedResultIds, dragPreview, dayDateStrings, usersById]);
+  }, [activeRun, dismissedResultIds, dragPreview, dayDateStrings, usersById, eventColorMap]);
 
   const busyBlocks = useMemo(() => {
-    type RawBusyBlock = { key: string; day: number; startMin: number; durationMin: number; label: string; color: string };
-    const raw: RawBusyBlock[] = [];
+    const raw: Array<{ key: string; day: number; startMin: number; durationMin: number; label: string; color: string }> = [];
     for (const interval of overview?.busy_intervals ?? []) {
       if (!visibleMemberIds.has(interval.user_id)) continue;
       const placement = gridPlacement(interval.start_at, dayDateStrings);
       if (!placement) continue;
-      const durationMin = Math.round(
-        (new Date(interval.end_at).getTime() - new Date(interval.start_at).getTime()) / 60000,
-      );
       raw.push({
         key: `busy-${interval.id}`,
         day: placement.day,
         startMin: placement.startMin,
-        durationMin,
+        durationMin: clampDurationToDay(placement.startMin, durationBetween(interval.start_at, interval.end_at)),
         label: `${usersById.get(interval.user_id)?.display_name ?? "Someone"} (busy)`,
         color: memberColorMap.get(interval.user_id) ?? "#e5e7eb",
       });
     }
-
-    // Overlapping busy blocks on the same day would otherwise render stacked on top
-    // of each other now that each one carries a visible name label -- split
-    // concurrent blocks into side-by-side lanes so they all stay readable.
-    const byDay = new Map<number, RawBusyBlock[]>();
-    for (const block of raw) {
-      if (!byDay.has(block.day)) byDay.set(block.day, []);
-      byDay.get(block.day)!.push(block);
-    }
-
-    const blocks: Array<RawBusyBlock & { lane: number; laneCount: number }> = [];
-    for (const dayBlocks of byDay.values()) {
-      dayBlocks.sort((a, b) => a.startMin - b.startMin);
-      const laneEndMin: number[] = [];
-      const withLanes: Array<RawBusyBlock & { lane: number }> = [];
-      for (const block of dayBlocks) {
-        let lane = laneEndMin.findIndex((end) => end <= block.startMin);
-        if (lane === -1) {
-          lane = laneEndMin.length;
-          laneEndMin.push(block.startMin + block.durationMin);
-        } else {
-          laneEndMin[lane] = block.startMin + block.durationMin;
-        }
-        withLanes.push({ ...block, lane });
-      }
-      const laneCount = laneEndMin.length;
-      for (const block of withLanes) blocks.push({ ...block, laneCount });
-    }
-
-    return blocks;
+    // Concurrent busy blocks carry a visible name label each, so they are split into
+    // side-by-side lanes per overlap cluster rather than stacked.
+    return assignLanes(raw);
   }, [overview, usersById, dayDateStrings, visibleMemberIds, memberColorMap]);
 
   const confirmedBlocks = useMemo(() => {
@@ -180,7 +170,6 @@ export function WeekGrid({
     for (const session of overview?.practice_sessions ?? []) {
       const event = eventsById.get(session.dance_event_id);
       if (!event || !checkedIds.has(event.id)) continue;
-      const durationMin = Math.round((new Date(session.end_at).getTime() - new Date(session.start_at).getTime()) / 60000);
       const preview = dragPreview?.kind === "confirmed" && dragPreview.id === session.id ? dragPreview : null;
       const placement = preview ?? gridPlacement(session.start_at, dayDateStrings);
       if (!placement) continue;
@@ -188,15 +177,15 @@ export function WeekGrid({
         key: `confirmed-${session.id}`,
         day: placement.day,
         startMin: placement.startMin,
-        durationMin,
-        color: eventColor(session.dance_event_id),
+        durationMin: clampDurationToDay(placement.startMin, durationBetween(session.start_at, session.end_at)),
+        color: eventColorMap.get(session.dance_event_id) ?? eventColor(session.dance_event_id),
         label: event.name,
         timeLabel: fmtHourLabel(placement.startMin),
         session,
       });
     }
     return blocks;
-  }, [overview, eventsById, checkedIds, dayDateStrings, dragPreview]);
+  }, [overview, eventsById, checkedIds, dayDateStrings, dragPreview, eventColorMap]);
 
   return (
     <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-auto">
@@ -239,7 +228,7 @@ export function WeekGrid({
                 durationMin={block.durationMin}
                 lane={block.lane}
                 laneCount={block.laneCount}
-                title={block.label}
+                aria-hidden
                 style={{
                   borderRadius: 6,
                   border: `1px solid ${block.color}`,
@@ -262,20 +251,21 @@ export function WeekGrid({
                 day={block.day}
                 startMin={block.startMin}
                 durationMin={block.durationMin}
+                tabIndex={0}
+                aria-label={`${block.label}, confirmed, ${format(days[block.day], "EEEE")} ${block.timeLabel}${editMode ? ". Drag to reschedule." : ""}`}
                 onMouseDown={
                   editMode
                     ? (e) => onStartConfirmedDrag(e, block.session, block.day, block.startMin, block.durationMin)
                     : undefined
                 }
+                className="shadow-sm"
                 style={{
                   background: block.color,
                   color: "#fff",
                   borderRadius: 8,
                   padding: "8px 10px",
-                  boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
                   cursor: editMode ? "grab" : "default",
-                  outline: editMode ? "2px dashed rgba(255,255,255,0.7)" : "none",
-                  outlineOffset: -4,
+                  border: editMode ? "2px dashed rgba(255,255,255,0.7)" : "2px solid transparent",
                   userSelect: editMode ? "none" : undefined,
                 }}
               >
@@ -290,10 +280,18 @@ export function WeekGrid({
                 day={block.day}
                 startMin={block.startMin}
                 durationMin={block.durationMin}
+                role="button"
+                tabIndex={0}
+                aria-label={`${block.label}, ${format(days[block.day], "EEEE")} ${block.timeLabel}${block.isFallback ? ", missing a required participant" : ""}. Press Enter to confirm this time.`}
                 title={block.tooltip}
                 onMouseDown={(e) => onStartSuggestedDrag(e, block.group, block.rec, block.day, block.startMin, block.durationMin)}
+                onKeyDown={(e) => {
+                  if (!isActivationKey(e) || e.target !== e.currentTarget) return;
+                  e.preventDefault();
+                  onConfirmSuggestion(block.group, block.rec);
+                }}
+                className="bg-card/70"
                 style={{
-                  background: "transparent",
                   border: `2px dashed ${block.isFallback ? "#dc2626" : block.color}`,
                   color: block.isFallback ? "#dc2626" : block.color,
                   borderRadius: 8,
@@ -302,16 +300,29 @@ export function WeekGrid({
                   userSelect: "none",
                 }}
               >
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={() => onDismissSuggestion(block.rec.id!)}
-                  className="absolute top-1 right-1 opacity-60 hover:opacity-100"
-                  title="Dismiss suggestion"
-                >
-                  <X className="size-3" />
-                </button>
-                <div className="text-xs font-bold truncate pr-3">{block.label}</div>
+                <div className="absolute top-1 right-1 flex items-center gap-0.5">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={() => onConfirmSuggestion(block.group, block.rec)}
+                    className="rounded p-0.5 opacity-70 hover:opacity-100 hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    title="Confirm this time"
+                    aria-label={`Confirm ${block.group.dance_name} at ${block.timeLabel}`}
+                  >
+                    <Check className="size-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={() => onDismissSuggestion(block.recId)}
+                    className="rounded p-0.5 opacity-60 hover:opacity-100 hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    title="Dismiss suggestion"
+                    aria-label={`Dismiss ${block.group.dance_name} suggestion at ${block.timeLabel}`}
+                  >
+                    <X className="size-3" />
+                  </button>
+                </div>
+                <div className="text-xs font-bold truncate pr-12">{block.label}</div>
                 <div className="text-[11px] opacity-80 mt-0.5">{block.timeLabel}</div>
                 {block.isFallback && <div className="text-[10px] font-semibold mt-0.5">missing required</div>}
               </CalendarBlock>

@@ -17,9 +17,14 @@ export function useConfirmPlanningRun() {
   return useMutation({
     mutationFn: ({ runId, body }: { runId: string; body: PlanningRunConfirmRequest }) =>
       planningApi.confirm(runId, body),
-    onSuccess: (data) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.events });
-      void queryClient.invalidateQueries({ queryKey: ["calendar-overview"] });
+    // Returning the refetch promise keeps the mutation pending until the overview
+    // holds the new session, so callers can clear drag previews / dismiss the
+    // suggestion without the block vanishing or snapping back in between.
+    onSuccess: async (data) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.events }),
+        queryClient.invalidateQueries({ queryKey: ["calendar-overview"] }),
+      ]);
       toast.success("Sessions confirmed");
       // The session is saved even when the Google Calendar push fails; saying only
       // "confirmed" left the user believing the event had reached their calendar.
@@ -34,8 +39,10 @@ export function useReschedulePractice() {
   return useMutation({
     mutationFn: ({ practiceId, body }: { practiceId: string; body: PracticeRescheduleRequest }) =>
       practicesApi.reschedule(practiceId, body),
-    onSuccess: (data) => {
-      void queryClient.invalidateQueries({ queryKey: ["calendar-overview"] });
+    // Awaited for the same reason as useConfirmPlanningRun: the caller keeps the drag
+    // preview at the drop position until the refetched overview agrees with it.
+    onSuccess: async (data) => {
+      await queryClient.invalidateQueries({ queryKey: ["calendar-overview"] });
       if (data.warning) {
         toast.warning(data.warning);
       } else {

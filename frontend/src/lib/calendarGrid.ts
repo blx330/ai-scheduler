@@ -56,3 +56,63 @@ export function gridPlacement(iso: string, dayDateStrings: string[]): { day: num
   const startMin = Math.max(DAY_START_MIN, Math.min(DAY_END_MIN - 1, instant.getHours() * 60 + instant.getMinutes()));
   return { day, startMin };
 }
+
+/** Truncate a block so it never draws past the bottom (midnight) edge of the grid. */
+export function clampDurationToDay(startMin: number, durationMin: number): number {
+  return Math.max(0, Math.min(durationMin, DAY_END_MIN - startMin));
+}
+
+export interface LaneInput {
+  day: number;
+  startMin: number;
+  durationMin: number;
+}
+
+/**
+ * Split concurrent blocks on the same day into side-by-side lanes.
+ *
+ * Lane count is computed per *cluster* of mutually-overlapping blocks, not per day:
+ * a lone 9 AM block keeps the full column width even if three blocks collide at
+ * 5 PM. Within a cluster, blocks are placed first-fit in start order, which for
+ * intervals uses exactly max-concurrency lanes. Blocks that only touch (end == start)
+ * do not overlap.
+ */
+export function assignLanes<T extends LaneInput>(blocks: readonly T[]): Array<T & { lane: number; laneCount: number }> {
+  const byDay = new Map<number, T[]>();
+  for (const block of blocks) {
+    const list = byDay.get(block.day);
+    if (list) list.push(block);
+    else byDay.set(block.day, [block]);
+  }
+
+  const out: Array<T & { lane: number; laneCount: number }> = [];
+  for (const dayBlocks of byDay.values()) {
+    dayBlocks.sort((a, b) => a.startMin - b.startMin);
+
+    let cluster: Array<T & { lane: number }> = [];
+    let laneEndMin: number[] = [];
+    let clusterEndMin = Number.NEGATIVE_INFINITY;
+
+    const flush = () => {
+      for (const block of cluster) out.push({ ...block, laneCount: laneEndMin.length });
+      cluster = [];
+      laneEndMin = [];
+    };
+
+    for (const block of dayBlocks) {
+      if (block.startMin >= clusterEndMin) flush();
+      const endMin = block.startMin + block.durationMin;
+      let lane = laneEndMin.findIndex((end) => end <= block.startMin);
+      if (lane === -1) {
+        lane = laneEndMin.length;
+        laneEndMin.push(endMin);
+      } else {
+        laneEndMin[lane] = endMin;
+      }
+      cluster.push({ ...block, lane });
+      clusterEndMin = Math.max(clusterEndMin, endMin);
+    }
+    flush();
+  }
+  return out;
+}

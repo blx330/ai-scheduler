@@ -1,10 +1,11 @@
+import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { CreateMemberDialog } from "@/components/people/CreateMemberDialog";
 import { useCurrentUser } from "@/hooks/use-auth";
 import { useUsers } from "@/hooks/use-users";
-import { userColor } from "@/lib/userColor";
+import { buildMemberColorMap } from "@/lib/userColor";
 
 function initialsFor(name: string): string {
   return name
@@ -20,6 +21,7 @@ export function MembersPage() {
   const { data: currentUser } = useCurrentUser();
   const navigate = useNavigate();
   const isOrganizer = currentUser?.role === "organizer";
+  const memberColorMap = useMemo(() => buildMemberColorMap((users ?? []).map((u) => u.id)), [users]);
 
   return (
     <div className="space-y-5 max-w-2xl">
@@ -47,7 +49,7 @@ export function MembersPage() {
             >
               <div
                 className="size-9 rounded-full border flex items-center justify-center font-bold text-sm text-foreground/70 shrink-0"
-                style={{ background: userColor(user.id) }}
+                style={{ background: memberColorMap.get(user.id) }}
               >
                 {initialsFor(user.display_name)}
               </div>

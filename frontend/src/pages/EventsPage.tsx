@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { CalendarX, Plus } from "lucide-react";
+import { CalendarX, ExternalLink, Plus } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,7 +21,8 @@ import { useCurrentUser } from "@/hooks/use-auth";
 import { useEventSessions, useEvents, useCreateEvent, useUpdateEvent } from "@/hooks/use-events";
 import { useUnschedulePractice } from "@/hooks/use-planning";
 import { useUsers } from "@/hooks/use-users";
-import { eventColor } from "@/lib/eventColor";
+import { buildEventColorMap } from "@/lib/eventColor";
+import { buildMemberColorMap } from "@/lib/userColor";
 import { hasRequiredParticipant } from "@/lib/participants";
 import { formatTimeRange, isoToZonedParts, localPartsToIso } from "@/lib/datetime";
 import { guessLocalTimezone } from "@/lib/timezones";
@@ -78,6 +79,9 @@ export function EventsPage() {
   const createEvent = useCreateEvent();
   const updateEvent = useUpdateEvent();
   const unschedule = useUnschedulePractice();
+
+  const eventColorMap = useMemo(() => buildEventColorMap((events ?? []).map((e) => e.id)), [events]);
+  const memberColorMap = useMemo(() => buildMemberColorMap((users ?? []).map((u) => u.id)), [users]);
 
   const [selectedId, setSelectedId] = useState<string | undefined>(eventId);
   const [form, setForm] = useState<EventFormState>(emptyForm());
@@ -237,7 +241,7 @@ export function EventsPage() {
                 : "bg-card text-foreground/70 border-black/10 hover:bg-accent/50",
             )}
           >
-            <span className="size-2 rounded-full" style={{ background: eventColor(eventItem.id) }} />
+            <span aria-hidden className="size-2 rounded-full" style={{ background: eventColorMap.get(eventItem.id) }} />
             {eventItem.name}
           </button>
         ))}
@@ -386,6 +390,7 @@ export function EventsPage() {
             <Label>Participants</Label>
             <ParticipantPicker
               users={users ?? []}
+              memberColorMap={memberColorMap}
               value={form.participants}
               onChange={(userId, selection) =>
                 setForm((f) => ({ ...f, participants: { ...f.participants, [userId]: selection } }))
@@ -427,6 +432,16 @@ export function EventsPage() {
                       {session.is_fallback && <Badge variant="warning">fallback</Badge>}
                       {session.total_score != null && <Badge variant="outline">score {session.total_score.toFixed(2)}</Badge>}
                     </div>
+                    {session.google_calendar_html_link && (
+                      <a
+                        href={session.google_calendar_html_link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-1 inline-flex items-center gap-1 text-xs text-primary underline-offset-4 hover:underline"
+                      >
+                        <ExternalLink className="size-3" /> Open in Google Calendar
+                      </a>
+                    )}
                   </div>
                   {isOrganizer ? (
                     <Button variant="outline" size="sm" onClick={() => unschedule.mutate(session.id)} disabled={unschedule.isPending}>

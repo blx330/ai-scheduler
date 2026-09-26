@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { addDays, addWeeks, endOfWeek, format, startOfWeek, subWeeks } from "date-fns";
-import { ChevronLeft, ChevronRight, Pencil } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import { useConfirmPlanningRun, useCreatePlanningRun, useReschedulePractice } fr
 import { useUsers } from "@/hooks/use-users";
 import { errorMessage } from "@/hooks/query-keys";
 import { DAY_END_MIN, DAY_START_MIN, PX_PER_MIN, addMinutesToDateTime, GRID_TIME_ZONE, planningHorizonStart } from "@/lib/calendarGrid";
+import { buildEventColorMap } from "@/lib/eventColor";
 import { buildMemberColorMap } from "@/lib/userColor";
 import { localPartsToIso } from "@/lib/datetime";
 import type {
@@ -118,17 +119,25 @@ export function CalendarPage() {
   // dances are checked.
   const visibleMemberIdList = useMemo(() => [...visibleMemberIds].sort(), [visibleMemberIds]);
 
-  const { data: overview, isError: overviewError } = useCalendarOverview(
+  const {
+    data: overview,
+    isError: overviewError,
+    isFetching: overviewFetching,
+  } = useCalendarOverview(
     weekStart.toISOString(),
     weekEnd.toISOString(),
     visibleMemberIdList,
   );
   // An empty grid is indistinguishable from a backend outage without this.
   const loadError = eventsError || overviewError;
+  // keepPreviousData leaves the last week on screen during a fetch, so the only cue
+  // that new data is on its way is this indicator.
+  const showFetching = overviewFetching && overview !== undefined;
 
   const eventsById = useMemo(() => new Map((events ?? []).map((e) => [e.id, e])), [events]);
   const usersById = useMemo(() => new Map((users ?? []).map((u) => [u.id, u])), [users]);
   const memberColorMap = useMemo(() => buildMemberColorMap((users ?? []).map((u) => u.id)), [users]);
+  const eventColorMap = useMemo(() => buildEventColorMap((events ?? []).map((e) => e.id)), [events]);
 
   function commitConfirm(
     runId: string,
@@ -136,29 +145,44 @@ export function CalendarPage() {
     label: string,
     override?: { start_at: string; end_at: string },
   ) {
-    if (!rec.id) return;
-    // The confirm round-trip also writes to Google Calendar and shows no immediate
-    // visual change, so without this an impatient second click double-submits.
-    if (confirmRun.isPending) return;
+    if (!rec.id || confirmRun.isPending) {
+      // The confirm round-trip also writes to Google Calendar and shows no immediate
+      // visual change, so without the isPending guard an impatient second click
+      // double-submits.
+      setDragPreview(null);
+      return;
+    }
     if (rec.is_fallback) {
+      // The drag preview (if any) stays at the drop position while the dialog is open.
       setPendingFallback({ runId, resultId: rec.id, label, override });
       return;
     }
-    const resultId = rec.id;
+    submitConfirmation(runId, rec.id, override);
+  }
+
+  function submitConfirmation(runId: string, resultId: string, override?: { start_at: string; end_at: string }) {
     confirmRun.mutate(
       { runId, body: { confirmations: [override ? { result_id: resultId, ...override } : { result_id: resultId }] } },
-      { onSuccess: () => setDismissedResultIds((prev) => new Set(prev).add(resultId)) },
+      {
+        // useConfirmPlanningRun awaits the overview refetch before onSuccess fires, so
+        // by the time the suggestion is dismissed the confirmed block is already there
+        // and the preview can be dropped without the block snapping back.
+        onSuccess: () => setDismissedResultIds((prev) => new Set(prev).add(resultId)),
+        onSettled: () => setDragPreview(null),
+      },
     );
   }
 
   function confirmPendingFallback() {
     if (!pendingFallback) return;
     const { runId, resultId, override } = pendingFallback;
-    confirmRun.mutate(
-      { runId, body: { confirmations: [override ? { result_id: resultId, ...override } : { result_id: resultId }] } },
-      { onSuccess: () => setDismissedResultIds((prev) => new Set(prev).add(resultId)) },
-    );
     setPendingFallback(null);
+    submitConfirmation(runId, resultId, override);
+  }
+
+  function confirmSuggestion(group: PlanningSessionRecommendationGroup, rec: PlanningRecommendationRead) {
+    if (!activeRun) return;
+    commitConfirm(activeRun.id, rec, group.dance_name);
   }
 
   function startDrag(
@@ -173,9 +197,11 @@ export function CalendarPage() {
     const runId = activeRun.id;
     const recId = rec.id;
     beginBlockDrag(e, "suggested", recId, day, startMin, durationMin, (finalDay, finalStartMin, moved) => {
-      setDragPreview(null);
+      // A plain click is not a confirmation: confirming goes through the explicit
+      // check button / Enter key so a visitor inspecting a suggestion cannot commit
+      // it (and write to Google Calendar) by accident.
       if (!moved) {
-        commitConfirm(runId, rec, group.dance_name);
+        setDragPreview(null);
         return;
       }
       const dateStr = dayDateStrings[finalDay];
@@ -272,7 +298,7 @@ export function CalendarPage() {
     toast.success(`Found candidate slots for ${planned} session(s)`);
   }
 
-  async function handleNewEvent() {
+  async function handleAutoScheduleNext() {
     const target = (events ?? []).find((e) => checkedIds.has(e.id) && e.remaining_session_count > 0);
     if (!target) {
       toast.error("No checked dance needs a new session.");
@@ -315,13 +341,27 @@ export function CalendarPage() {
             <p className="text-sm text-muted-foreground">
               {format(weekStart, "MMM d")} &ndash; {format(weekEnd, "MMM d, yyyy")}
             </p>
-            <Button variant="ghost" size="icon" className="size-6" onClick={() => setAnchor((prev) => subWeeks(prev, 1))}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6"
+              aria-label="Previous week"
+              title="Previous week"
+              onClick={() => setAnchor((prev) => subWeeks(prev, 1))}
+            >
               <ChevronLeft className="size-3.5" />
             </Button>
             <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setAnchor(new Date())}>
               Today
             </Button>
-            <Button variant="ghost" size="icon" className="size-6" onClick={() => setAnchor((prev) => addWeeks(prev, 1))}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6"
+              aria-label="Next week"
+              title="Next week"
+              onClick={() => setAnchor((prev) => addWeeks(prev, 1))}
+            >
               <ChevronRight className="size-3.5" />
             </Button>
           </div>
@@ -340,6 +380,7 @@ export function CalendarPage() {
             onClick={() => setPanelCollapsed(false)}
             className="shrink-0 size-8 rounded-lg border flex items-center justify-center text-muted-foreground hover:bg-accent/50"
             title="Show sidebar"
+            aria-label="Show sidebar"
           >
             <ChevronRight className="size-4" />
           </button>
@@ -348,6 +389,7 @@ export function CalendarPage() {
             {isOrganizer ? <SchedulingRequestPanel onPlanned={handleRequestPlanned} /> : null}
             <DancesPanel
               events={events ?? []}
+              eventColorMap={eventColorMap}
               checkedIds={checkedIds}
               onToggleChecked={(eventId, checked) =>
                 setCheckedIds((prev) => {
@@ -359,7 +401,7 @@ export function CalendarPage() {
               }
               onCollapse={() => setPanelCollapsed(true)}
               onSuggestSessions={handleSuggestSessions}
-              onNewEvent={handleNewEvent}
+              onAutoSchedule={handleAutoScheduleNext}
               isPending={createRun.isPending}
               canEdit={isOrganizer}
             />
@@ -379,7 +421,16 @@ export function CalendarPage() {
           </div>
         )}
 
-        <Card className="flex-1 min-w-0 self-stretch flex flex-col min-h-0 overflow-hidden p-0">
+        <Card className="relative flex-1 min-w-0 self-stretch flex flex-col min-h-0 overflow-hidden p-0">
+          {showFetching && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="absolute right-3 top-3 z-20 flex items-center gap-1.5 rounded-full bg-card/90 px-2.5 py-1 text-xs text-muted-foreground shadow-sm"
+            >
+              <Loader2 className="size-3 animate-spin" aria-hidden /> Updating…
+            </div>
+          )}
           <WeekGrid
             days={days}
             dayDateStrings={dayDateStrings}
@@ -389,6 +440,7 @@ export function CalendarPage() {
             checkedIds={checkedIds}
             visibleMemberIds={visibleMemberIds}
             memberColorMap={memberColorMap}
+            eventColorMap={eventColorMap}
             activeRun={activeRun}
             dismissedResultIds={dismissedResultIds}
             dragPreview={dragPreview}
@@ -397,6 +449,7 @@ export function CalendarPage() {
             scrollContainerRef={scrollContainerRef}
             onStartSuggestedDrag={startDrag}
             onStartConfirmedDrag={startConfirmedDrag}
+            onConfirmSuggestion={confirmSuggestion}
             onDismissSuggestion={(recId) => setDismissedResultIds((prev) => new Set(prev).add(recId))}
           />
         </Card>
@@ -404,12 +457,16 @@ export function CalendarPage() {
 
       <FallbackConfirmDialog
         pendingFallback={pendingFallback}
-        onCancel={() => setPendingFallback(null)}
+        onCancel={() => {
+          setPendingFallback(null);
+          setDragPreview(null);
+        }}
         onConfirm={confirmPendingFallback}
       />
 
       <RescheduleConflictDialog
         pendingReschedule={pendingReschedule}
+        isPending={reschedulePractice.isPending}
         onCancel={() => {
           setPendingReschedule(null);
           setDragPreview(null);

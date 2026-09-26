@@ -13,10 +13,13 @@ export type ParticipantSelection = ParticipantRole | "none";
 
 export function ParticipantPicker({
   users,
+  memberColorMap,
   value,
   onChange,
 }: {
   users: UserRead[];
+  /** Collision-bumped colours shared with the calendar, so a member looks the same everywhere. */
+  memberColorMap: Map<string, string>;
   value: Record<string, ParticipantSelection>;
   onChange: (userId: string, selection: ParticipantSelection) => void;
 }) {
@@ -29,7 +32,7 @@ export function ParticipantPicker({
       {users.map((user) => (
         <div key={user.id} className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <span className="size-2.5 rounded-full shrink-0" style={{ background: userColor(user.id) }} />
+            <span className="size-2.5 rounded-full shrink-0" style={{ background: memberColorMap.get(user.id) ?? userColor(user.id) }} />
             <Label className="font-normal">{user.display_name}</Label>
           </div>
           <Select
