@@ -86,7 +86,11 @@ python -m scripts.eval_scheduling_parser --oracle                 # replays labe
 python -m scripts.eval_scheduling_parser --delay 13 --output evals/results/latest.json   # live Gemini
 ```
 
-**Live accuracy has not been measured yet.** The first live run was blocked by Gemini free-tier quota (5 requests/minute and 20/day per model, fewer than the 23 cases) and provider overload; the harness stops instead of scoring outages as misses, keeps finished cases in the `--output` file, and continues from it with `--resume evals/results/latest.json`. On the free tier a full run therefore takes two days; with billing enabled it takes about 5 minutes.
+**Live results** (`gemini-3.6-flash`, 2026-09-28, [`evals/results/latest.json`](backend/evals/results/latest.json)): **23/23 (100%)** requests correctly accepted or rejected, **18/23 (78%)** parsed with every field exact. Four of the five misses are the same error: for requests with no start date ("by Oct 10", "within the next 2 weeks", "this week") the model fills `earliest_date` with today instead of leaving it null. Because a stated field overrides the dance's saved value, that would replace a saved start date; the review step shows the change before anything is written. The fifth (a per-session Friday exception) is still correctly rejected as unsupported.
+
+The first live run surfaced a truncation bug: thinking tokens count toward `max_output_tokens`, and with a shared 1,024 cap a long think cut the JSON off mid-object (5 of 23 cases failed as "not valid JSON"). Thinking now has its own 2,048-token budget with 1,024 answer tokens on top.
+
+On Gemini's free tier (5 requests/minute, 20/day per model) a full run needs `--delay 13` and two days; the harness stops instead of scoring outages as misses, keeps finished cases in the `--output` file, and continues from it with `--resume evals/results/latest.json`. With billing enabled it takes about a minute.
 
 ## Code structure (actual repo layout)
 

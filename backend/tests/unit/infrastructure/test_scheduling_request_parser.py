@@ -43,19 +43,20 @@ VALID = {
 
 
 class FakeModels:
-    def __init__(self, response: Any) -> None:
+    def __init__(self, response: Any, finish_reason: str = "STOP") -> None:
         self.response = response
+        self.finish_reason = finish_reason
         self.calls: list[dict[str, Any]] = []
 
     def generate_content(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
         if isinstance(self.response, Exception):
             raise self.response
-        return SimpleNamespace(text=self.response)
+        return SimpleNamespace(text=self.response, candidates=[SimpleNamespace(finish_reason=self.finish_reason)])
 
 
-def _parser(response: Any) -> tuple[GeminiSchedulingRequestParser, FakeModels]:
-    models = FakeModels(response)
+def _parser(response: Any, finish_reason: str = "STOP") -> tuple[GeminiSchedulingRequestParser, FakeModels]:
+    models = FakeModels(response, finish_reason)
     parser = GeminiSchedulingRequestParser(
         api_key="test-key", model="test-model", client_factory=lambda api_key: SimpleNamespace(models=models)
     )
@@ -91,6 +92,27 @@ def test_calls_gemini_deterministically_in_json_mode_with_grounding_context() ->
     for name in [*CONTEXT.event_names, *CONTEXT.member_names, *CONTEXT.room_names]:
         assert json.dumps(name) in prompt
     assert "<request>\nSchedule 3 Hip Hop rehearsals\n</request>" in prompt
+
+
+def test_thinking_cannot_crowd_out_the_answer() -> None:
+    # Thinking tokens count toward max_output_tokens; with one shared 1,024 cap, a
+    # long think truncated the JSON mid-object. Thinking gets its own budget and the
+    # answer keeps at least 1,024 tokens on top of it.
+    parser, models = _parser(json.dumps(VALID))
+
+    parser.parse("Schedule 3 Hip Hop rehearsals", CONTEXT)
+
+    config = models.calls[0]["config"]
+    thinking_budget = config.thinking_config.thinking_budget
+    assert thinking_budget is not None and thinking_budget > 0
+    assert config.max_output_tokens - thinking_budget >= 1_024
+
+
+def test_output_cut_off_at_the_token_limit_says_so() -> None:
+    parser, _ = _parser('{"event_name": "Hip Hop", "sess', finish_reason="MAX_TOKENS")
+
+    with pytest.raises(SchedulingRequestParseError, match="cut off"):
+        parser.parse("Schedule 3 Hip Hop rehearsals", CONTEXT)
 
 
 def test_request_text_cannot_close_its_delimiter() -> None:

@@ -29,7 +29,12 @@ from app.domain.scheduling.requests import (
 logger = logging.getLogger(__name__)
 
 MAX_OUTPUT_CHARS = 8_000
-MAX_OUTPUT_TOKENS = 1_024
+# Thinking tokens count toward max_output_tokens, so thinking gets its own budget
+# and the JSON answer keeps ANSWER_TOKENS on top of it (a shared 1,024 cap let a
+# long think truncate the answer mid-object).
+THINKING_BUDGET_TOKENS = 2_048
+ANSWER_TOKENS = 1_024
+MAX_OUTPUT_TOKENS = THINKING_BUDGET_TOKENS + ANSWER_TOKENS
 
 
 class SchedulingRequestParserUnavailable(RuntimeError):
@@ -138,7 +143,10 @@ class GeminiSchedulingRequestParser:
         except Exception as exc:  # provider SDKs raise a wide, unstable set of types
             logger.warning("Scheduling request LLM call failed: %s", exc)
             raise SchedulingRequestUpstreamError(f"Gemini request failed: {exc}") from exc
-        return validate_model_output(getattr(response, "text", None))
+        raw = getattr(response, "text", None)
+        if _finish_reason(response) == "MAX_TOKENS":
+            raise SchedulingRequestParseError("The model's response was cut off at the output token limit.", raw_output=raw)
+        return validate_model_output(raw)
 
 
 class UnconfiguredSchedulingRequestParser:
@@ -208,8 +216,18 @@ def _generation_config() -> Any:
         system_instruction=SYSTEM_PROMPT,
         temperature=0,
         max_output_tokens=MAX_OUTPUT_TOKENS,
+        thinking_config=types_module.ThinkingConfig(thinking_budget=THINKING_BUDGET_TOKENS),
         response_mime_type="application/json",
     )
+
+
+def _finish_reason(response: Any) -> str | None:
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        return None
+    reason = getattr(candidates[0], "finish_reason", None)
+    # The SDK's FinishReason is a str enum; fakes and older SDKs pass plain strings.
+    return str(getattr(reason, "value", reason)) if reason is not None else None
 
 
 def _default_client_factory(api_key: str) -> Any:
