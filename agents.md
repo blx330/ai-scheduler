@@ -231,7 +231,7 @@ For backend work, prefer explicit commands and isolated environments.
 Use the project’s local virtual environment and avoid global installs.
 
 When changing backend code:
-- use the local `.venv` if present
+- use the local `.venv_local` (Python 3.11) if present
 - install dependencies there only
 - run tests after meaningful changes
 - report what passed, what failed, and what remains incomplete
