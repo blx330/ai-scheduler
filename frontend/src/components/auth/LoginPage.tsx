@@ -27,7 +27,7 @@ export function LoginPage() {
     <div className="h-svh flex items-center justify-center bg-background p-6">
       <Card className="w-full max-w-sm">
         <CardHeader className="items-center text-center gap-2">
-          <CardTitle className="text-xl">AI Scheduler</CardTitle>
+          <CardTitle className="text-xl">Dance Scheduler</CardTitle>
           <CardDescription>Sign in to view and plan your team's practice schedule.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">

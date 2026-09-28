@@ -1,6 +1,6 @@
-# AI Scheduler — frontend
+# Dance Scheduler — frontend
 
-React + TypeScript SPA for the AI Scheduler backend, built with Vite, Tailwind CSS, and hand-built shadcn/ui components (Radix primitives + class-variance-authority + tailwind-merge).
+React + TypeScript SPA for the Dance Scheduler backend, built with Vite, Tailwind CSS, and hand-built shadcn/ui components (Radix primitives + class-variance-authority + tailwind-merge).
 
 See the repo root `README.md` for the full local-dev and Docker workflow. Quick reference:
 

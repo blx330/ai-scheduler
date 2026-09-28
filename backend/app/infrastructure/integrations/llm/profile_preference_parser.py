@@ -17,10 +17,16 @@ from typing import Any, Protocol
 from pydantic import ValidationError
 
 from app.domain.preferences.models import CachedPracticePreference, summarize_cached_preference
+from app.infrastructure.integrations.llm.gemini_response import finish_reason
 
 GEMINI_PROFILE_MODEL = "gemini-3.6-flash"
 MAX_OUTPUT_CHARS = 8_000
-MAX_OUTPUT_TOKENS = 400
+# Thinking tokens count toward max_output_tokens, so thinking gets its own budget
+# and the JSON answer keeps ANSWER_TOKENS on top of it (a shared 400 cap let every
+# live request think its way past the limit and truncate the answer).
+THINKING_BUDGET_TOKENS = 1_024
+ANSWER_TOKENS = 512
+MAX_OUTPUT_TOKENS = THINKING_BUDGET_TOKENS + ANSWER_TOKENS
 logger = logging.getLogger(__name__)
 
 
@@ -153,7 +159,10 @@ class GeminiUserProfilePreferenceParser:
         except Exception as exc:  # provider SDKs raise a wide, unstable set of types
             logger.warning("Profile preference LLM call failed: %s", exc)
             raise ProfilePreferenceUpstreamError("The language model could not be reached; try again.") from exc
-        return validate_model_output(getattr(response, "text", None), raw_text=raw_text)
+        raw = getattr(response, "text", None)
+        if finish_reason(response) == "MAX_TOKENS":
+            raise ProfilePreferenceParseError("The model's response was cut off at the output token limit.", raw_output=raw)
+        return validate_model_output(raw, raw_text=raw_text)
 
 
 def build_user_prompt(raw_text: str, timezone_name: str) -> str:
@@ -214,6 +223,7 @@ def _generation_config() -> Any:
         system_instruction=SYSTEM_PROMPT,
         temperature=0,
         max_output_tokens=MAX_OUTPUT_TOKENS,
+        thinking_config=types_module.ThinkingConfig(thinking_budget=THINKING_BUDGET_TOKENS),
         response_mime_type="application/json",
     )
 

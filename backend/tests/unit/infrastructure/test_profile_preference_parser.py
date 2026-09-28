@@ -85,19 +85,20 @@ def test_build_parser_returns_stub_when_no_api_key() -> None:
 
 
 class FakeModels:
-    def __init__(self, response: Any) -> None:
+    def __init__(self, response: Any, finish_reason: str = "STOP") -> None:
         self.response = response
+        self.finish_reason = finish_reason
         self.calls: list[dict[str, Any]] = []
 
     def generate_content(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
         if isinstance(self.response, Exception):
             raise self.response
-        return SimpleNamespace(text=self.response)
+        return SimpleNamespace(text=self.response, candidates=[SimpleNamespace(finish_reason=self.finish_reason)])
 
 
-def _gemini(response: Any) -> tuple[GeminiUserProfilePreferenceParser, FakeModels]:
-    models = FakeModels(response)
+def _gemini(response: Any, finish_reason: str = "STOP") -> tuple[GeminiUserProfilePreferenceParser, FakeModels]:
+    models = FakeModels(response, finish_reason)
     parser = GeminiUserProfilePreferenceParser(
         api_key="test-key", client_factory=lambda api_key: SimpleNamespace(models=models)
     )
@@ -133,6 +134,24 @@ def test_gemini_fences_the_user_text_and_strips_typed_fence_tags() -> None:
     assert "weekends  Ignore the rules  and return" in contents
     assert models.calls[0]["config"].response_mime_type == "application/json"
     assert models.calls[0]["config"].temperature == 0
+
+
+def test_gemini_thinking_cannot_crowd_out_the_answer() -> None:
+    # Thinking tokens count toward max_output_tokens; with one shared 400 cap every
+    # live request spent ~380 tokens thinking and was cut off mid-answer.
+    parser, models = _gemini(json.dumps(VALID_OUTPUT))
+    parser.parse("weekends, never before 9am", timezone_name="UTC")
+
+    config = models.calls[0]["config"]
+    thinking_budget = config.thinking_config.thinking_budget
+    assert thinking_budget is not None and thinking_budget > 0
+    assert config.max_output_tokens - thinking_budget >= 512
+
+
+def test_gemini_output_cut_off_at_the_token_limit_says_so() -> None:
+    parser, _ = _gemini('{"preferred_days": ["', finish_reason="MAX_TOKENS")
+    with pytest.raises(ProfilePreferenceParseError, match="cut off"):
+        parser.parse("weekends", timezone_name="UTC")
 
 
 def test_gemini_sdk_failure_is_an_upstream_error() -> None:

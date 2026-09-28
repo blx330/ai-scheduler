@@ -1,6 +1,6 @@
-# AI Scheduler
+# Dance Scheduler
 
-[![CI](https://github.com/blx330/ai-scheduler/actions/workflows/ci.yml/badge.svg)](https://github.com/blx330/ai-scheduler/actions/workflows/ci.yml)
+[![CI](https://github.com/blx330/dance-scheduler/actions/workflows/ci.yml/badge.svg)](https://github.com/blx330/dance-scheduler/actions/workflows/ci.yml)
 
 **[Live demo →](https://ai-scheduler-6pas.onrender.com)** — a real deterministic scheduling engine with real Google Calendar sync, seeded with a student dance team's actual-looking semester (classes, labs, shifts, an exam, a new member with no availability yet) so there's nothing to set up. Click "Continue as demo guest" to sign in as the shared organizer. It's a public shared demo (see [below](#public-demo)) and hosted on a free tier, so the first load can take up to a minute to wake up.
 
