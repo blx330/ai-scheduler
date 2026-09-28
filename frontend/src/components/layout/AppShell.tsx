@@ -23,7 +23,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="flex-1 flex flex-col md:flex-row min-h-0">
         <aside className="md:w-64 shrink-0 border-b md:border-b-0 md:border-r border-black/5 flex flex-col">
           <div className="p-5 pb-6">
-            <div className="text-lg font-bold tracking-tight">AI Scheduler</div>
+            <div className="text-lg font-bold tracking-tight">Dance Scheduler</div>
             <div className="text-xs text-muted-foreground mt-0.5">Dance practice planning</div>
           </div>
           <nav className="flex md:flex-col gap-1 px-3 pb-4 overflow-x-auto md:overflow-visible">

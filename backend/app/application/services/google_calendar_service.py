@@ -295,7 +295,7 @@ class GoogleCalendarService:
             end_at=ensure_utc(practice_session.end_at),
             timezone_name=dance_event.organizer.timezone,
             attendee_emails=attendee_emails,
-            description="Created by the AI scheduler demo app.",
+            description="Created by the Dance Scheduler demo app.",
         )
 
         practice_session.google_calendar_event_id = created_event.event_id
